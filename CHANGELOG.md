@@ -2,6 +2,12 @@
 
 User-visible changes are collected here for each release. GitHub is the planned sharing and release channel for reviewed source snapshots; Forgejo remains the everyday development remote.
 
+## 0.2.2 — Draft preview
+
+- Updated quinn-proto to 0.11.15 to address its reported remote memory exhaustion vulnerability.
+- Includes the verified remix identity and bundled updater launch fixes from 0.2.1.
+- Signed distribution and production automatic updates remain gated as described below.
+
 ## 0.2.1 — Draft preview
 
 ### Fixed
