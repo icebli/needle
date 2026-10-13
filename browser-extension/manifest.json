@@ -1,0 +1,43 @@
+{
+  "manifest_version": 2,
+  "name": "Needle",
+  "version": "0.1.0",
+  "description": "Send the current recording to Needle and optionally add the cleaned local file to Spotify.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "needle@tege.dev",
+      "strict_min_version": "109.0"
+    }
+  },
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "nativeMessaging",
+    "notifications",
+    "storage",
+    "tabs"
+  ],
+  "background": {
+    "scripts": ["track-detection.js", "background.js"]
+  },
+  "browser_action": {
+    "default_title": "Download with Needle",
+    "default_popup": "popup.html",
+    "default_icon": "icons/needle.svg"
+  },
+  "icons": {
+    "48": "icons/needle.svg",
+    "96": "icons/needle.svg"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://youtu.be/*",
+        "*://*.soundcloud.com/*"
+      ],
+      "js": ["context-capture.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

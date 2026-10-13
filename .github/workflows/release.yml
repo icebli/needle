@@ -1,0 +1,76 @@
+name: Build macOS release draft
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag (for example v0.2.0)
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - name: Validate version and runner
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$(uname -m)" == arm64 ]]
+          git rev-parse "refs/tags/$RELEASE_TAG"
+          test -s "docs/releases/$RELEASE_TAG.md"
+          echo "NEEDLE_APP_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
+      - name: Install build prerequisites
+        run: brew install rust ffmpeg node
+      - name: Fetch pinned standalone yt-dlp and verify checksum
+        run: |
+          mkdir -p target/release-tools
+          cd target/release-tools
+          curl --fail --location --retry 3 -o yt-dlp_macos https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos
+          curl --fail --location --retry 3 -o SHA2-256SUMS https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/SHA2-256SUMS
+          awk '$2 == "yt-dlp_macos" {print}' SHA2-256SUMS > selected.sha256
+          test -s selected.sha256
+          shasum -a 256 -c selected.sha256
+          chmod +x yt-dlp_macos
+      - name: Verify source
+        run: |
+          cargo test --locked
+          cargo clippy --locked --workspace --all-targets
+          scripts/test-desktop.sh
+          node --test browser-extension/tests/*.test.js spicetify/tests/*.test.js
+          python3 -m unittest discover -s tests/release -v
+      - name: Package preview installer
+        env:
+          NEEDLE_YTDLP_PATH: ${{ github.workspace }}/target/release-tools/yt-dlp_macos
+        run: scripts/package-desktop.sh --version "$NEEDLE_APP_VERSION" --format dmg
+      - name: Verify bundled toolchain without Homebrew on PATH
+        run: |
+          app="$GITHUB_WORKSPACE/target/desktop/Needle.app"
+          export PATH="$app/Contents/Resources/bin:/usr/bin:/bin"
+          needle doctor --json
+          ffmpeg -v error -f lavfi -i sine=frequency=440:duration=1 -y "$RUNNER_TEMP/needle-smoke.mp3"
+          ffprobe -v error -show_entries format=duration -of json "$RUNNER_TEMP/needle-smoke.mp3"
+          cp "$app/Contents/Resources/NeedleToolchain.json" dist/
+          cp "$app/Contents/Resources/THIRD_PARTY_NOTICES.md" dist/
+      - name: Attach draft assets and curated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          cd dist
+          shasum -a 256 *.dmg > SHA256SUMS.txt
+          cd ..
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Needle $NEEDLE_APP_VERSION preview" --notes-file "docs/releases/$RELEASE_TAG.md"
+          fi
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          gh release upload "$RELEASE_TAG" dist/*.dmg dist/SHA256SUMS.txt dist/NeedleToolchain.json dist/THIRD_PARTY_NOTICES.md --clobber

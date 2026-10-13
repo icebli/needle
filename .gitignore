@@ -1,0 +1,41 @@
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key
+
+# GitNexus
+.gitnexus/
+
+# Beads / Dolt
+.dolt/
+*.db
+.beads-credential-key
+
+
+# Added by cargo
+
+/target
+/dist/
+__pycache__/
+*.pyc
+
+# SwiftPM desktop build products
+/desktop/.build/
+/desktop/.swiftpm/
+/.build/
