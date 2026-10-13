@@ -7,9 +7,17 @@ ICON_SOURCE="$REPO_DIR/desktop/Resources/Needle.icns"
 ICON_PATH="$APP_DIR/Contents/Resources/Needle.icns"
 WORKSPACE_VERSION="$(awk -F'\"' '/^version = \"/ { print $2; exit }' "$REPO_DIR/Cargo.toml")"
 APP_VERSION="${NEEDLE_APP_VERSION:-$WORKSPACE_VERSION}"
-BUILD_NUMBER="${NEEDLE_BUILD_NUMBER:-${APP_VERSION//[^0-9.]/}}"
-BUILD_NUMBER="${BUILD_NUMBER//./}"
-BUILD_NUMBER="${BUILD_NUMBER:-1}"
+# Fixed-width components keep Sparkle build numbers increasing at patch/minor
+# boundaries (concatenating 0.2.10 and 0.3.0 would incorrectly give 0210 > 030).
+if [[ ! "$APP_VERSION" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+  echo "NEEDLE_APP_VERSION must contain three numeric components below 1000" >&2
+  exit 2
+fi
+BUILD_NUMBER="${NEEDLE_BUILD_NUMBER:-$((10#${BASH_REMATCH[1]} * 1000000 + 10#${BASH_REMATCH[2]} * 1000 + 10#${BASH_REMATCH[3]}))}"
+if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ || "$BUILD_NUMBER" == 0 ]]; then
+  echo "NEEDLE_BUILD_NUMBER must be a positive integer" >&2
+  exit 2
+fi
 
 if [[ "$CONFIGURATION" != "debug" && "$CONFIGURATION" != "release" ]]; then
   echo "NEEDLE_BUILD_CONFIGURATION must be debug or release" >&2

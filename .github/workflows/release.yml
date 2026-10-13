@@ -63,7 +63,9 @@ jobs:
         env:
           NEEDLE_YTDLP_PATH: ${{ github.workspace }}/target/release-tools/yt-dlp_macos
           NEEDLE_NODE_PATH: ${{ github.workspace }}/target/release-tools/node-v24.14.1-darwin-arm64/bin/node
-        run: scripts/package-desktop.sh --version "$NEEDLE_APP_VERSION" --format dmg
+        run: |
+          export NEEDLE_UPDATE_PUBLIC_KEY="$(tr -d '[:space:]' < desktop/Resources/UpdatePublicKey.txt)"
+          scripts/package-desktop.sh --version "$NEEDLE_APP_VERSION" --format dmg --preview-updates
       - name: Verify bundled toolchain without Homebrew on PATH
         run: |
           app="$GITHUB_WORKSPACE/target/desktop/Needle.app"
@@ -82,6 +84,14 @@ jobs:
           kill "$app_pid"
           cp "$app/Contents/Resources/NeedleToolchain.json" dist/
           cp "$app/Contents/Resources/THIRD_PARTY_NOTICES.md" dist/
+      - name: Capture third-party build provenance
+        run: |
+          app="$GITHUB_WORKSPACE/target/desktop/Needle.app"
+          mkdir -p dist/third-party
+          scripts/collect-third-party-sources.sh "$app" dist/third-party --download-sources
+          cp dist/third-party/THIRD_PARTY_SOURCE_MANIFEST.json dist/
+          cp dist/third-party/THIRD_PARTY_SOURCE_MATERIALS.md dist/
+          tar -czf dist/Needle-third-party-provenance.tar.gz -C dist/third-party .
       - name: Attach draft assets and curated notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -95,4 +105,4 @@ jobs:
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "Needle $NEEDLE_APP_VERSION preview" --notes-file "docs/releases/$RELEASE_TAG.md"
           fi
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-          gh release upload "$RELEASE_TAG" dist/*.dmg dist/SHA256SUMS.txt dist/NeedleToolchain.json dist/THIRD_PARTY_NOTICES.md --clobber
+          gh release upload "$RELEASE_TAG" dist/*.dmg dist/SHA256SUMS.txt dist/NeedleToolchain.json dist/THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_SOURCE_MANIFEST.json dist/THIRD_PARTY_SOURCE_MATERIALS.md dist/Needle-third-party-provenance.tar.gz --clobber

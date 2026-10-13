@@ -7,11 +7,12 @@ Needle helps you find the right recording, listen to a preview, and save it to y
 The first shared build is planned for **Apple Silicon Macs (M1 or newer) running macOS 15 Sequoia or later**. This compatibility target still needs verification. Always check the minimum macOS version in the exact release you download. Intel Macs and Windows are not included in this first installer.
 
 1. Open [Needle releases](https://github.com/icebli/needle/releases). Public releases can be downloaded without a GitHub account.
-2. Choose a published release and download its `.dmg` file from **Assets**. You do not need the “Source code” downloads.
+2. Choose the friend-preview release and download its `.dmg` file from **Assets**. You do not need the “Source code” downloads.
 3. Open the downloaded disk image and drag **Needle** onto **Applications**.
 4. Open **Applications → Needle**, then eject the disk image.
+5. If macOS says it cannot verify the developer, click **Done**, then open **System Settings → Privacy & Security**. Scroll to the Security section, click **Open Anyway** for Needle, and confirm **Open** in the second dialog. This approval is needed because the preview is unsigned. macOS may ask again after a later manually downloaded build.
 
-**Preview availability:** public sharing is planned after a source/privacy review; version 0.2.0 is being prepared as a draft preview. The current local review build requires macOS 27 and is not the planned macOS 15 release. Draft releases are not available to ordinary readers. A signed, notarized installer is not available yet; wait for the published release instructions before sharing a download with friends. An unsigned preview may be blocked by macOS. Do not disable Gatekeeper to install it.
+**Unsigned preview:** this is an intentional early sharing build. It is suitable for invited friends who trust the source, but it does not have Apple's Developer ID identity or notarization ticket. Check the exact release notes for the supported Apple Silicon and macOS versions. Never disable Gatekeeper, run commands that remove quarantine, or install a build from an untrusted mirror.
 
 Release packages are intended to include their audio tools. Check the release notes for the exact package's verification status; the source-development installer has separate requirements. You should not need Rust, Xcode, or Terminal to use a verified packaged build.
 
@@ -50,9 +51,9 @@ After delivery, Activity shows the destination playlist and an **Open playlist**
 
 ## Update Needle
 
-In a configured release build, choose **Needle → Check for Updates…** and follow the update window. Needle uses Sparkle to offer verified updates; published updates must be signed and notarized, with a matching update signature. Read the release notes before installing.
+In a configured release build, choose **Needle → Check for Updates…** and follow the update window. Sparkle verifies each update with Needle's Ed25519 update key; this is separate from Apple's Developer ID signing. An unsigned app can technically use Sparkle, but macOS may require **Open Anyway** again after the downloaded app is installed, and the update cannot be promised as silent or frictionless. The current friend preview keeps automatic checks disabled until that unsigned-update path has been tested end to end.
 
-The current unsigned preview has update checks disabled, and no production update is available yet. This disabled menu item does not mean your installation is broken. Until a signed release and its update feed are ready, update manually: quit Needle, download the newer published release, and drag its app into **Applications**, replacing the old app when Finder asks. Your music is stored separately in **Music → needle**.
+Until an update feed is enabled for your release, update manually: quit Needle, download the newer published release, and drag its app into **Applications**, replacing the old app when Finder asks. Your music is stored separately in **Music → needle**. Never accept an update from a URL outside the official Needle release page.
 
 ## Advanced settings and help
 

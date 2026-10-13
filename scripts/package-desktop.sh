@@ -10,6 +10,7 @@ VERSION="${NEEDLE_APP_VERSION:-$WORKSPACE_VERSION}"
 OUTPUT_DIR="$REPO_DIR/dist"
 FORMAT="dmg"
 SIGN_IDENTITY="-"
+UPDATE_MODE="disabled"
 YTDLP_PATH="${NEEDLE_YTDLP_PATH:-}"
 FFMPEG_PATH="${NEEDLE_FFMPEG_PATH:-}"
 FFPROBE_PATH="${NEEDLE_FFPROBE_PATH:-}"
@@ -24,6 +25,7 @@ Usage: scripts/package-desktop.sh [options]
   --output DIR            Artifact directory (default: dist)
   --format dmg|pkg|both   Artifact type (default: dmg)
   --sign IDENTITY         codesign identity, or - for ad-hoc (default: -)
+  --preview-updates       embed the trusted Sparkle feed in an ad-hoc preview
   --arch arm64            Required architecture (default: arm64)
   --yt-dlp PATH           Official standalone yt-dlp_macos asset
   --ffmpeg PATH           FFmpeg executable to bundle
@@ -42,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --output) OUTPUT_DIR="$2"; shift 2 ;;
     --format) FORMAT="$2"; shift 2 ;;
     --sign) SIGN_IDENTITY="$2"; shift 2 ;;
+    --preview-updates) UPDATE_MODE="preview"; shift ;;
     --arch) ARCH="$2"; shift 2 ;;
     --yt-dlp) YTDLP_PATH="$2"; shift 2 ;;
     --ffmpeg) FFMPEG_PATH="$2"; shift 2 ;;
@@ -55,6 +58,10 @@ done
 [[ "$FORMAT" == dmg || "$FORMAT" == pkg || "$FORMAT" == both ]] || { echo "--format must be dmg, pkg, or both" >&2; exit 2; }
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][A-Za-z0-9.-]+)?$ ]] || { echo "version must look like 1.2.3" >&2; exit 2; }
 [[ "$ARCH" == arm64 ]] || { echo "this first distribution workflow supports arm64 only" >&2; exit 2; }
+if [[ "$UPDATE_MODE" == preview && "$SIGN_IDENTITY" != "-" ]]; then
+  echo "--preview-updates requires the ad-hoc signing identity (-)" >&2
+  exit 2
+fi
 command -v hdiutil >/dev/null || { echo "hdiutil is required on macOS" >&2; exit 1; }
 command -v pkgbuild >/dev/null || { echo "pkgbuild is required on macOS" >&2; exit 1; }
 
@@ -73,7 +80,7 @@ cleanup() { rm -rf "$STAGING"; }
 trap cleanup EXIT
 
 mkdir -p "$OUTPUT_DIR"
-NEEDLE_APP_VERSION="$VERSION" NEEDLE_BUILD_NUMBER="${VERSION//[^0-9]/}" \
+NEEDLE_APP_VERSION="$VERSION" \
   "$REPO_DIR/scripts/build-desktop.sh"
 
 "$REPO_DIR/scripts/bundle-media-tools.sh" "$APP_DIR" "$YTDLP_PATH" "$FFMPEG_PATH" "$FFPROBE_PATH" "$NODE_PATH"
@@ -119,9 +126,26 @@ path.write_text(json.dumps(data, indent=2) + "\n")
 PY
 echo "Bundled Mach-O deployment floor: macOS $REQUIRED_MACOS"
 
-if [[ "$SIGN_IDENTITY" != "-" && -n "${NEEDLE_UPDATE_PUBLIC_KEY:-}" ]]; then
+UPDATE_PUBLIC_KEY="${NEEDLE_UPDATE_PUBLIC_KEY:-}"
+if [[ "$UPDATE_MODE" == preview && -z "$UPDATE_PUBLIC_KEY" && -f "$REPO_DIR/desktop/Resources/UpdatePublicKey.txt" ]]; then
+  UPDATE_PUBLIC_KEY="$(tr -d '[:space:]' < "$REPO_DIR/desktop/Resources/UpdatePublicKey.txt")"
+fi
+if [[ "$UPDATE_MODE" == preview && -z "$UPDATE_PUBLIC_KEY" ]]; then
+  echo "--preview-updates requires the committed Sparkle public key" >&2
+  exit 2
+fi
+if [[ "$UPDATE_MODE" == preview || ( "$SIGN_IDENTITY" != "-" && -n "$UPDATE_PUBLIC_KEY" ) ]]; then
+  python3 - "$UPDATE_PUBLIC_KEY" <<'PY'
+import base64, sys
+try:
+    if len(base64.b64decode(sys.argv[1], validate=True)) != 32:
+        raise ValueError
+except ValueError:
+    raise SystemExit("NEEDLE_UPDATE_PUBLIC_KEY must be a base64-encoded 32-byte Ed25519 key")
+PY
   /usr/libexec/PlistBuddy -c "Add :SUFeedURL string https://raw.githubusercontent.com/icebli/needle/main/appcast.xml" "$APP_DIR/Contents/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :SUFeedURL https://raw.githubusercontent.com/icebli/needle/main/appcast.xml" "$APP_DIR/Contents/Info.plist"
-  /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $NEEDLE_UPDATE_PUBLIC_KEY" "$APP_DIR/Contents/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $NEEDLE_UPDATE_PUBLIC_KEY" "$APP_DIR/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $UPDATE_PUBLIC_KEY" "$APP_DIR/Contents/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $UPDATE_PUBLIC_KEY" "$APP_DIR/Contents/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :SUVerifyUpdateBeforeExtraction bool true" "$APP_DIR/Contents/Info.plist" 2>/dev/null || /usr/libexec/PlistBuddy -c "Set :SUVerifyUpdateBeforeExtraction true" "$APP_DIR/Contents/Info.plist"
 else
   /usr/libexec/PlistBuddy -c "Delete :SUFeedURL" "$APP_DIR/Contents/Info.plist" 2>/dev/null || true
   /usr/libexec/PlistBuddy -c "Delete :SUPublicEDKey" "$APP_DIR/Contents/Info.plist" 2>/dev/null || true

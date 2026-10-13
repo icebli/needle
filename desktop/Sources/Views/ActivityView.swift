@@ -38,8 +38,20 @@ struct TrackRow: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(track.title).font(.headline)
                     Text(track.artist + (track.album.isEmpty ? "" : " · \(track.album)")).foregroundStyle(.secondary)
-                    Text(activityLabel(for: track)).font(.callout.weight(.medium))
-                    if let path = track.savedPath { Text(path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
+                    Label(activityLabel(for: track), systemImage: activitySymbol(for: track))
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(track.spotifyStatus == .failed ? .red : .primary)
+                    if let path = track.savedPath {
+                        DisclosureGroup("File details") {
+                            Label(path, systemImage: "folder")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .padding(.top, 2)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if let path = track.savedPath {
@@ -78,5 +90,13 @@ struct TrackRow: View {
               let playlist = track.spotifyPlaylistName,
               track.savedPath != nil else { return track.stage.label }
         return "File saved · Waiting for Spotify to add to \"\(playlist)\""
+    }
+
+    private func activitySymbol(for track: TrackRequest) -> String {
+        if track.spotifyStatus == .added { return "checkmark.circle.fill" }
+        if track.spotifyStatus == .failed || track.stage == .failed { return "exclamationmark.triangle.fill" }
+        if track.spotifyStatus == .pending { return "hourglass" }
+        if track.savedPath != nil { return "checkmark.circle" }
+        return "arrow.down.circle"
     }
 }

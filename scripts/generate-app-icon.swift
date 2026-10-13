@@ -30,45 +30,53 @@ func roundedRect(_ context: CGContext, _ rect: CGRect, radius: CGFloat) {
 }
 
 func drawIcon(in context: CGContext, size: CGFloat) {
-    let scale = size / 1024
     context.saveGState()
-    context.scaleBy(x: scale, y: scale)
+    context.scaleBy(x: size / 512, y: size / 512)
+    context.translateBy(x: 0, y: 512)
+    context.scaleBy(x: 1, y: -1)
     context.setAllowsAntialiasing(true)
     context.setShouldAntialias(true)
-    context.interpolationQuality = .high
-
-    let canvas = CGRect(x: 0, y: 0, width: 1024, height: 1024)
-    context.setFillColor(NSColor(calibratedRed: 0.98, green: 0.42, blue: 0.16, alpha: 1).cgColor)
-    roundedRect(context, canvas.insetBy(dx: 24, dy: 24), radius: 214)
+    let background = NSColor(srgbRed: 21/255, green: 24/255, blue: 28/255, alpha: 1).cgColor
+    let record = NSColor(srgbRed: 11/255, green: 13/255, blue: 16/255, alpha: 1).cgColor
+    let groove = NSColor(srgbRed: 41/255, green: 46/255, blue: 52/255, alpha: 1).cgColor
+    let amber = NSColor(srgbRed: 241/255, green: 184/255, blue: 75/255, alpha: 1).cgColor
+    context.setFillColor(background)
+    roundedRect(context, CGRect(x: 0, y: 0, width: 512, height: 512), radius: 112)
     context.fillPath()
-
-    // A dark record and its warm center make the mark legible at small sizes.
-    let record = CGRect(x: 178, y: 170, width: 668, height: 668)
-    context.setFillColor(NSColor(calibratedRed: 0.08, green: 0.10, blue: 0.14, alpha: 1).cgColor)
-    context.fillEllipse(in: record)
-    context.setFillColor(NSColor(calibratedRed: 0.98, green: 0.80, blue: 0.48, alpha: 1).cgColor)
-    context.fillEllipse(in: CGRect(x: 470, y: 462, width: 84, height: 84))
-    context.setFillColor(NSColor(calibratedRed: 0.08, green: 0.10, blue: 0.14, alpha: 1).cgColor)
-    context.fillEllipse(in: CGRect(x: 503, y: 495, width: 18, height: 18))
-
-    // Needle arm and cartridge cut through the record as a single strong diagonal.
-    context.setStrokeColor(NSColor(calibratedRed: 0.98, green: 0.80, blue: 0.48, alpha: 1).cgColor)
-    context.setLineWidth(48)
+    context.setFillColor(record)
+    context.setStrokeColor(groove)
+    context.setLineWidth(8)
+    context.addEllipse(in: CGRect(x: 90, y: 108, width: 320, height: 320))
+    context.drawPath(using: .fillStroke)
+    context.setLineWidth(6)
+    for radius: CGFloat in [126, 94, 62] {
+        context.strokeEllipse(in: CGRect(x: 250-radius, y: 268-radius, width: radius*2, height: radius*2))
+    }
+    context.setFillColor(amber)
+    context.fillEllipse(in: CGRect(x: 217, y: 235, width: 66, height: 66))
+    context.setFillColor(background)
+    context.fillEllipse(in: CGRect(x: 241, y: 259, width: 18, height: 18))
+    context.setStrokeColor(amber)
+    context.setLineWidth(22)
     context.setLineCap(.round)
-    context.move(to: CGPoint(x: 322, y: 716))
-    context.addLine(to: CGPoint(x: 704, y: 334))
+    context.move(to: CGPoint(x: 103, y: 128))
+    context.addLine(to: CGPoint(x: 150, y: 128))
+    context.addCurve(to: CGPoint(x: 197, y: 175), control1: CGPoint(x: 176, y: 128), control2: CGPoint(x: 197, y: 149))
+    context.addLine(to: CGPoint(x: 197, y: 190))
+    context.addLine(to: CGPoint(x: 324, y: 317))
     context.strokePath()
-    context.setFillColor(NSColor(calibratedRed: 0.98, green: 0.80, blue: 0.48, alpha: 1).cgColor)
-    roundedRect(context, CGRect(x: 656, y: 266, width: 132, height: 144), radius: 30)
+    context.saveGState()
+    context.translateBy(x: 304, y: 300)
+    context.rotate(by: -.pi / 4)
+    context.setFillColor(amber)
+    roundedRect(context, CGRect(x: 0, y: 0, width: 64, height: 92), radius: 18)
     context.fillPath()
-    context.setFillColor(NSColor(calibratedRed: 0.08, green: 0.10, blue: 0.14, alpha: 1).cgColor)
-    context.move(to: CGPoint(x: 705, y: 285))
-    context.addLine(to: CGPoint(x: 782, y: 362))
-    context.addLine(to: CGPoint(x: 760, y: 384))
-    context.addLine(to: CGPoint(x: 683, y: 307))
-    context.closePath()
-    context.fillPath()
-
+    context.restoreGState()
+    context.setStrokeColor(background)
+    context.setLineWidth(11)
+    context.move(to: CGPoint(x: 345, y: 365))
+    context.addLine(to: CGPoint(x: 376, y: 396))
+    context.strokePath()
     context.restoreGState()
 }
 

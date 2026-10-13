@@ -1,5 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <rect width="64" height="64" rx="14" fill="#111418"/>
-  <path d="M18 46 42 18M15 49l7-2-5-5-2 7Z" stroke="#FF4147" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M39 21c7-2 10 2 8 7-2 6 7 5 6 12-1 5-7 4-9 1" stroke="#FF4147" stroke-width="3" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Needle record player mark</title>
+  <desc id="desc">A warm amber tonearm rests over a dark record with visible grooves.</desc>
+  <rect width="512" height="512" rx="112" fill="#15181C"/>
+  <circle cx="250" cy="268" r="160" fill="#0B0D10" stroke="#292E34" stroke-width="8"/>
+  <circle cx="250" cy="268" r="126" fill="none" stroke="#252A30" stroke-width="6"/>
+  <circle cx="250" cy="268" r="94" fill="none" stroke="#252A30" stroke-width="6"/>
+  <circle cx="250" cy="268" r="62" fill="none" stroke="#252A30" stroke-width="6"/>
+  <circle cx="250" cy="268" r="33" fill="#F1B84B"/>
+  <circle cx="250" cy="268" r="9" fill="#15181C"/>
+  <path d="M103 128h47c26 0 47 21 47 47v15" fill="none" stroke="#F1B84B" stroke-width="22" stroke-linecap="round"/>
+  <path d="M197 190 324 317" fill="none" stroke="#F1B84B" stroke-width="22" stroke-linecap="round"/>
+  <rect x="304" y="300" width="64" height="92" rx="18" transform="rotate(-45 304 300)" fill="#F1B84B"/>
+  <path d="m345 365 31 31" stroke="#15181C" stroke-width="11" stroke-linecap="round"/>
 </svg>

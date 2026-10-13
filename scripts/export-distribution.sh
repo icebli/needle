@@ -53,8 +53,11 @@ git -C "$stage/repo" rm -r -f --ignore-unmatch -- . >/dev/null
 # Export only committed, public-facing source. Development trackers, agent
 # configuration, private commit messages and original author emails stay local.
 git archive "$source_commit" Cargo.toml Cargo.lock LICENSE README.md CHANGELOG.md \
-  .gitignore .github appcast.xml crates desktop docs tests scripts browser-extension native-host spicetify \
+  .gitignore .github appcast.xml assets crates desktop docs tests scripts browser-extension native-host spicetify \
   | tar -xf - -C "$stage/repo"
+# Maintainer remote/export instructions are local operational guidance.
+# The sharing repository contains reader-facing guides and source only.
+rm -f "$stage/repo/docs/RELEASING.md"
 "$scanner" dir --redact --no-banner "$stage/repo"
 python3 scripts/audit-distribution.py "$stage/repo"
 cd "$stage/repo"

@@ -12,6 +12,9 @@ struct PreviewControlsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
+                Label("Preview", systemImage: "headphones")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 if isCurrent && service.isPreparing {
                     ProgressView().controlSize(.small)
                     Text("Preparing a 30-second preview…")
@@ -48,7 +51,15 @@ struct PreviewControlsView: View {
             }
         }
         .font(.callout)
-        .padding(.top, 2)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background {
+            if #available(macOS 26.0, *) {
+                Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12))
+            } else {
+                RoundedRectangle(cornerRadius: 12).fill(.quaternary.opacity(0.45))
+            }
+        }
     }
 
     private func format(_ seconds: Double) -> String {

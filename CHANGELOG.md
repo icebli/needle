@@ -2,6 +2,13 @@
 
 User-visible changes are collected here for each release. GitHub is the planned sharing and release channel for reviewed source snapshots; Forgejo remains the everyday development remote.
 
+## 0.2.5 — Unsigned friend preview
+
+- Adds clear first-launch instructions for unsigned Apple Silicon builds, including macOS **Open Anyway** approval in System Settings.
+- Explains the difference between Sparkle's Ed25519 update verification and Apple's Developer ID/notarization checks.
+- Keeps automatic update checks disabled until the unsigned update path is validated end to end; manual updates remain available.
+- Keeps advanced Settings and the full CLI available for experienced users.
+
 ## 0.2.4 — Draft preview
 
 - Bundles a checksum-verified official standalone Node.js runtime, avoiding an external Homebrew libnode dependency.
