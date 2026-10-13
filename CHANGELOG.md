@@ -2,6 +2,12 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.2.6
+
+- Updated record-player logo and sharper app icon.
+- Clearer Activity file details and Spotify playlist destinations.
+- Unsigned Mac installer with authenticated in-app update support.
+
 ## 0.2.5 — Preview
 
 - Clearer installation and first-launch instructions.

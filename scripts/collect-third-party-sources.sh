@@ -65,6 +65,12 @@ def download(url: str, target: pathlib.Path) -> str:
         shutil.copyfileobj(response, handle)
     return sha256(target)
 
+def download_verified(url: str, target: pathlib.Path, expected: str | None = None) -> tuple[str, str | None]:
+    actual = download(url, target)
+    if expected and actual != expected:
+        raise SystemExit(f"source checksum mismatch for {url}: {actual} != {expected}")
+    return actual, expected
+
 def download_pypi(name: str, version: str, target: pathlib.Path) -> tuple[str, str]:
     metadata_url = f"https://pypi.org/pypi/{name}/{version}/json"
     request = urllib.request.Request(metadata_url, headers={"User-Agent": "needle-release-source-capture/1"})
@@ -99,6 +105,25 @@ def extract_license(archive: pathlib.Path, destination: pathlib.Path) -> str | N
 ffmpeg = json.loads((out / "homebrew-ffmpeg.json").read_text())["formulae"][0]
 names = [ffmpeg["name"], *ffmpeg.get("dependencies", [])]
 dependency_info = {item["name"]: item for item in brew_json(*names).get("formulae", [])}
+
+# Record the formula that owns every copied non-system FFmpeg dylib. Direct
+# formula dependencies alone are insufficient because Homebrew can add runtime
+# dependencies that are not declared directly by ffmpeg.
+bundled_libs = []
+runtime_names = [item.get("full_name", item.get("name")) for item in ffmpeg.get("installed", [{}])[0].get("runtime_dependencies", [])]
+all_formula_names = list(dict.fromkeys([*names, *runtime_names]))
+dependency_info = {item["name"]: item for item in brew_json(*all_formula_names).get("formulae", [])}
+for lib in sorted((app / "Contents/Resources/lib").glob("*.dylib")):
+    owners = []
+    for formula in all_formula_names:
+        prefix = subprocess.run(["brew", "--prefix", formula], check=False, capture_output=True, text=True).stdout.strip()
+        if prefix and any(candidate.name == lib.name for candidate in pathlib.Path(prefix, "lib").glob(f"{lib.name}*")):
+            owners.append(formula)
+    bundled_libs.append({"path": str(lib.relative_to(app)), "sha256": sha256(lib), "owners": owners})
+owner_names = sorted({owner for item in bundled_libs for owner in item["owners"]})
+unowned_libs = [item["path"] for item in bundled_libs if not item["owners"]]
+if all_formula_names != names:
+    dependency_info = {item["name"]: item for item in brew_json(*all_formula_names).get("formulae", [])}
 
 def upstream_formula(item: dict) -> dict:
     urls = item.get("urls", {}).get("stable", {})
@@ -161,7 +186,7 @@ sources = [
         "component": "Sparkle",
         "license": "MIT",
         "release_url": "https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0",
-        "source_url": "https://github.com/sparkle-project/Sparkle/archive/refs/tags/2.10.0.tar.gz",
+        "source_url": "https://github.com/sparkle-project/Sparkle/archive/eef1a539a373c1f1a320624b1130fc5de7b2e100.tar.gz",
         "release_checksums_url": None,
         "source_sha256": None,
         "status": "source-archive-checksum-required",
@@ -181,6 +206,9 @@ manifest = {
         "tap_head": os.environ.get("TAP_HEAD") or None,
         "ffmpeg": upstream_formula(ffmpeg),
         "dependencies": [upstream_formula(dependency_info[name]) for name in names[1:] if name in dependency_info],
+        "bundled_library_owners": bundled_libs,
+        "unowned_bundled_libraries": unowned_libs,
+        "owner_formulas": [upstream_formula(dependency_info[name]) for name in owner_names if name in dependency_info],
         "formula_json": "homebrew-ffmpeg.json",
         "config": "homebrew-config.txt",
     },
@@ -192,19 +220,50 @@ source_dir = out / "sources"
 license_dir = out / "licenses"
 source_records = []
 if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
+    if unowned_libs:
+        raise SystemExit("unowned bundled Homebrew libraries: " + ", ".join(unowned_libs))
     source_dir.mkdir(parents=True, exist_ok=True)
     license_dir.mkdir(parents=True, exist_ok=True)
-    for item in [ffmpeg, *[dependency_info[name] for name in names[1:] if name in dependency_info]]:
+    for formula_name in all_formula_names:
+        item = dependency_info.get(formula_name)
+        if not item:
+            raise SystemExit(f"missing Homebrew formula metadata for {formula_name}")
+        stable_version = item.get("versions", {}).get("stable")
+        installed = item.get("installed", [])
+        if not stable_version or not installed:
+            raise SystemExit(f"missing installed Homebrew version for {formula_name}")
+        installed_version = installed[0].get("version")
+        formula_revision = item.get("revision", 0) or 0
+        expected_version = f"{stable_version}_{formula_revision}" if formula_revision else stable_version
+        if installed_version != expected_version:
+            raise SystemExit(f"Homebrew version mismatch for {formula_name}: installed {installed_version}, formula {expected_version}")
         stable = item.get("urls", {}).get("stable", {})
         url = stable.get("url")
         expected = stable.get("checksum")
-        if not url or not expected:
-            raise SystemExit(f"missing Homebrew source URL/checksum for {item.get('name')}")
-        filename = pathlib.PurePosixPath(url.split("?", 1)[0]).name or f"{item['name']}.source"
-        archive = source_dir / f"{item['name']}-{item.get('versions', {}).get('stable', 'unknown')}-{filename}"
-        actual = download(url, archive)
-        if actual != expected:
-            raise SystemExit(f"Homebrew source checksum mismatch for {item['name']}: {actual} != {expected}")
+        source_revision = stable.get("revision")
+        if not url:
+            raise SystemExit(f"missing Homebrew source URL for {item.get('name')}")
+        if expected:
+            filename = pathlib.PurePosixPath(url.split("?", 1)[0]).name or f"{item['name']}.source"
+            archive = source_dir / f"{item['name']}-{item.get('versions', {}).get('stable', 'unknown')}-{filename}"
+            actual = download(url, archive)
+            if actual != expected:
+                raise SystemExit(f"Homebrew source checksum mismatch for {item['name']}: {actual} != {expected}")
+            source_basis = "homebrew-published-sha256"
+        elif source_revision:
+            # Git-backed formulas such as x264 have no tarball checksum. Pin
+            # the exact Homebrew revision and archive that commit locally.
+            archive = source_dir / f"{item['name']}-{item.get('versions', {}).get('stable', 'unknown')}-{source_revision}.tar.gz"
+            with tempfile.TemporaryDirectory(prefix="needle-source-") as checkout:
+                subprocess.run(["git", "init", "--quiet", checkout], check=True)
+                subprocess.run(["git", "-C", checkout, "remote", "add", "origin", url], check=True)
+                subprocess.run(["git", "-C", checkout, "fetch", "--quiet", "--depth", "1", "origin", source_revision], check=True)
+                with archive.open("wb") as output:
+                    subprocess.run(["git", "-C", checkout, "archive", "--format=tar.gz", source_revision], check=True, stdout=output)
+            actual = sha256(archive)
+            source_basis = "pinned-git-commit-archive"
+        else:
+            raise SystemExit(f"missing Homebrew source checksum and git revision for {item.get('name')}")
         license_name = extract_license(archive, license_dir / f"{item['name']}-LICENSE")
         formula = subprocess.run(["brew", "cat", item.get("full_name", item["name"])], check=True, capture_output=True, text=True)
         (out / "formulae").mkdir(parents=True, exist_ok=True)
@@ -214,6 +273,8 @@ if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
             "component": item.get("full_name", item["name"]),
             "source_url": url,
             "source_sha256": actual,
+            "source_revision": source_revision,
+            "verification_basis": source_basis,
             "license": item.get("license"),
             "license_file": str(pathlib.Path("licenses") / f"{item['name']}-LICENSE") if license_name else None,
             "formula_file": str(pathlib.Path("formulae") / f"{item['name']}.rb"),
@@ -222,14 +283,20 @@ if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
     yt_version = str(toolchain.get("yt_dlp", {}).get("version", ""))
     node_version = str(toolchain.get("node", {}).get("version", "")).lstrip("v")
     extras = [
-        ("yt-dlp", f"https://github.com/yt-dlp/yt-dlp/archive/refs/tags/{yt_version}.tar.gz", "GPL-3.0-or-later"),
-        ("node", f"https://nodejs.org/dist/v{node_version}/node-v{node_version}.tar.gz", "MIT"),
-        ("sparkle", "https://github.com/sparkle-project/Sparkle/archive/refs/tags/2.10.0.tar.gz", "MIT"),
+        ("yt-dlp", f"https://github.com/yt-dlp/yt-dlp/releases/download/{yt_version}/yt-dlp.tar.gz", "GPL-3.0-or-later", f"https://github.com/yt-dlp/yt-dlp/releases/download/{yt_version}/SHA2-256SUMS", "yt-dlp.tar.gz"),
+        ("node", f"https://nodejs.org/dist/v{node_version}/node-v{node_version}.tar.gz", "MIT", f"https://nodejs.org/dist/v{node_version}/SHASUMS256.txt", f"node-v{node_version}.tar.gz"),
+        ("sparkle", "https://github.com/sparkle-project/Sparkle/archive/eef1a539a373c1f1a320624b1130fc5de7b2e100.tar.gz", "MIT", None, None),
     ]
-    for name, url, license_id in extras:
+    for name, url, license_id, checksums_url, checksum_name in extras:
         filename = pathlib.PurePosixPath(url).name
         archive = source_dir / filename
-        actual = download(url, archive)
+        expected = None
+        if checksums_url:
+            checksum_text = urllib.request.urlopen(urllib.request.Request(checksums_url, headers={"User-Agent": "needle-release-source-capture/1"}), timeout=90).read().decode()
+            expected = next((line.split()[0] for line in checksum_text.splitlines() if line.split()[-1] == checksum_name), None)
+            if not expected:
+                raise SystemExit(f"published checksum missing for {name}: {checksum_name}")
+        actual, _ = download_verified(url, archive, expected)
         license_name = extract_license(archive, license_dir / f"{name}-LICENSE")
         bundled_notice = None
         if name == "yt-dlp":
@@ -245,6 +312,10 @@ if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
             "component": name,
             "source_url": url,
             "source_sha256": actual,
+            "published_sha256": expected,
+            "source_revision": "eef1a539a373c1f1a320624b1130fc5de7b2e100" if name == "sparkle" else None,
+            "package_resolved_revision": "eef1a539a373c1f1a320624b1130fc5de7b2e100" if name == "sparkle" else None,
+            "verification_basis": "pinned-package-resolved-revision" if name == "sparkle" else ("official-published-checksum" if expected else None),
             "license": license_id,
             "license_file": str(pathlib.Path("licenses") / f"{name}-LICENSE") if license_name else None,
             "bundled_third_party_notice": str(pathlib.Path("licenses") / bundled_notice.name) if bundled_notice else None,
@@ -279,7 +350,10 @@ if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
         "complete" if standalone_sources_complete else "incomplete-yt-dlp-standalone-dependencies"
     )
 else:
-    manifest["corresponding_source_status"] = "incomplete-until-archives-and-checksums-are-attached"
+    manifest["corresponding_source_status"] = (
+        "incomplete-unowned-bundled-library" if unowned_libs
+        else "incomplete-until-archives-and-checksums-are-attached"
+    )
 (out / "THIRD_PARTY_SOURCE_MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 lines = [

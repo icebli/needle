@@ -7,12 +7,12 @@ Needle helps you find the right recording, listen to a preview, and save it to y
 The first shared build is planned for **Apple Silicon Macs (M1 or newer) running macOS 15 Sequoia or later**. Always check the minimum macOS version in the exact release you download. Intel Macs and Windows are not included in this first installer.
 
 1. Open [Needle releases](https://github.com/icebli/needle/releases). Public releases can be downloaded without a GitHub account.
-2. Choose the friend-preview release and download its `.dmg` file from **Assets**. You do not need the “Source code” downloads.
+2. Choose the latest release and download its `.dmg` file from **Assets**. You do not need the “Source code” downloads.
 3. Open the downloaded disk image and drag **Needle** onto **Applications**.
 4. Open **Applications → Needle**, then eject the disk image.
 5. If macOS says it cannot verify the developer, click **Done**, then open **System Settings → Privacy & Security**. Scroll to the Security section, click **Open Anyway** for Needle, and confirm **Open** in the second dialog. This approval is needed because the preview is unsigned. macOS may ask again after a later manually downloaded build.
 
-**Unsigned preview:** this is an intentional early sharing build. It is suitable for invited friends who trust the source, but it does not have Apple's Developer ID identity or notarization ticket. Check the exact release notes for the supported Apple Silicon and macOS versions. Never disable Gatekeeper, run commands that remove quarantine, or install a build from an untrusted mirror.
+**Unsigned app:** this build does not have Apple's Developer ID identity or notarization ticket. Check the exact release notes for the supported Apple Silicon and macOS versions. Never disable Gatekeeper, run commands that remove quarantine, or install a build from an untrusted mirror.
 
 The Mac installer includes its audio tools. You do not need Rust, Xcode, Homebrew, or Terminal to use it.
 

@@ -61,6 +61,13 @@ class UpdateScriptTests(unittest.TestCase):
         self.assertIn("resolved-copyleft-dependencies", source)
         self.assertIn("download_pypi", source)
         self.assertIn("version_evidence", source)
+        self.assertIn("bundled_library_owners", source)
+        self.assertIn("published checksum missing", source)
+        self.assertIn("pinned-git-commit-archive", source)
+        self.assertIn("missing Homebrew source checksum and git revision", source)
+        self.assertIn("unowned bundled Homebrew libraries", source)
+        self.assertIn("Homebrew version mismatch", source)
+        self.assertIn("pinned-release-tag-and-package-resolved-revision", source)
 
     def test_wrong_or_mixed_archives_never_reach_signing(self):
         with tempfile.TemporaryDirectory() as directory:

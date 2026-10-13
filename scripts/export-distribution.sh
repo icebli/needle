@@ -2,8 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO_DIR="$PWD"
-if [[ $# -lt 1 || $# -gt 2 || ! "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ( $# == 2 && "$2" != --check && "$2" != --feed-only ) ]]; then
-  echo "Usage: scripts/export-distribution.sh VERSION [--check|--feed-only]" >&2
+if [[ $# -lt 1 || $# -gt 2 || ! "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || ( $# == 2 && "$2" != --check && "$2" != --feed-only && "$2" != --docs-only ) ]]; then
+  echo "Usage: scripts/export-distribution.sh VERSION [--check|--feed-only|--docs-only]" >&2
   exit 2
 fi
 version="$1"
@@ -27,25 +27,34 @@ if [[ -n "$(git -C "$stage/repo" branch --show-current)" ]]; then
   git -C "$stage/repo" checkout -B main
 fi
 
-if [[ "${2:-}" == --feed-only ]]; then
-  # Feed maintenance is deliberately isolated from source snapshots and tags.
-  # It copies only the committed, audited appcast and never creates or moves a
-  # version tag on GitHub.
-  git cat-file -e "$source_commit:appcast.xml"
-  git show "$source_commit:appcast.xml" > "$stage/repo/appcast.xml"
+if [[ "${2:-}" == --feed-only || "${2:-}" == --docs-only ]]; then
+  # Maintenance copies a fixed allowlist; existing release tags are immutable.
+  files=(appcast.xml)
+  message="Update Sparkle appcast"
+  if [[ "$2" == --docs-only ]]; then
+    files=(README.md CHANGELOG.md docs/GETTING_STARTED.md docs/CLI.md docs/desktop.md docs/browser-extension.md)
+    while IFS= read -r file; do files+=("$file"); done < <(git ls-tree -r --name-only "$source_commit" docs/releases)
+    git -C "$stage/repo" rm -f --ignore-unmatch -- docs/RELEASING.md docs/QA.md docs/architecture.md docs/THIRD_PARTY_RELEASE.md >/dev/null
+    message="Update release guides"
+  fi
+  for file in "${files[@]}"; do
+    git show "$source_commit:$file" > "$stage/repo/$file"
+  done
   "$scanner" dir --redact --no-banner "$stage/repo"
   python3 scripts/audit-distribution.py "$stage/repo"
   cd "$stage/repo"
   git config user.name 'Needle releases'
   git config user.email 'releases@needle.invalid'
-  git add appcast.xml
+  git add -- "${files[@]}"
+  # Include removals of maintainer-only documentation.
+  if [[ "$2" == --docs-only ]]; then git add -u -- docs; fi
   if git diff --cached --quiet; then
-    echo "GitHub appcast already matches the committed source; no remote changes made."
+    echo "GitHub maintenance files already match; no remote changes made."
     exit 0
   fi
-  git commit --quiet -m "Update Sparkle appcast"
+  git commit --quiet -m "$message"
   git push origin main
-  echo "Published audited appcast only; existing GitHub version tags were not changed."
+  echo "Published audited maintenance files; existing GitHub tags were not changed."
   exit 0
 fi
 
@@ -57,7 +66,8 @@ git archive "$source_commit" Cargo.toml Cargo.lock LICENSE README.md CHANGELOG.m
   | tar -xf - -C "$stage/repo"
 # Maintainer remote/export instructions are local operational guidance.
 # The sharing repository contains reader-facing guides and source only.
-rm -f "$stage/repo/docs/RELEASING.md"
+rm -f "$stage/repo/docs/RELEASING.md" "$stage/repo/docs/QA.md" \
+  "$stage/repo/docs/architecture.md" "$stage/repo/docs/THIRD_PARTY_RELEASE.md"
 "$scanner" dir --redact --no-banner "$stage/repo"
 python3 scripts/audit-distribution.py "$stage/repo"
 cd "$stage/repo"

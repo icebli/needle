@@ -89,6 +89,7 @@ jobs:
           app="$GITHUB_WORKSPACE/target/desktop/Needle.app"
           mkdir -p dist/third-party
           scripts/collect-third-party-sources.sh "$app" dist/third-party --download-sources
+          python3 -c 'import json; m=json.load(open("dist/third-party/THIRD_PARTY_SOURCE_MANIFEST.json")); assert m["corresponding_source_status"] == "complete", "Incomplete corresponding sources"; assert not m.get("unowned_bundled_libraries"), "Unowned bundled libraries"; assert all(s["status"] == "verified" for s in m["sources"]), "Unverified source materials"'
           cp dist/third-party/THIRD_PARTY_SOURCE_MANIFEST.json dist/
           cp dist/third-party/THIRD_PARTY_SOURCE_MATERIALS.md dist/
           tar -czf dist/Needle-third-party-provenance.tar.gz -C dist/third-party .
@@ -102,7 +103,7 @@ jobs:
           shasum -a 256 *.dmg > SHA256SUMS.txt
           cd ..
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Needle $NEEDLE_APP_VERSION preview" --notes-file "docs/releases/$RELEASE_TAG.md"
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Needle $NEEDLE_APP_VERSION" --notes-file "docs/releases/$RELEASE_TAG.md"
           fi
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
           gh release upload "$RELEASE_TAG" dist/*.dmg dist/SHA256SUMS.txt dist/NeedleToolchain.json dist/THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_SOURCE_MANIFEST.json dist/THIRD_PARTY_SOURCE_MATERIALS.md dist/Needle-third-party-provenance.tar.gz --clobber
