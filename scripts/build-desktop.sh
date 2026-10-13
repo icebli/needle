@@ -31,6 +31,9 @@ if [[ ! -f "$ICON_SOURCE" ]]; then
 fi
 install -m 0644 "$ICON_SOURCE" "$ICON_PATH"
 install -m 0755 "$BIN_DIR/NeedleDesktop" "$APP_DIR/Contents/MacOS/NeedleDesktop"
+if ! otool -l "$APP_DIR/Contents/MacOS/NeedleDesktop" | grep -Fq '@executable_path/../Frameworks'; then
+  install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP_DIR/Contents/MacOS/NeedleDesktop"
+fi
 install -m 0755 "$REPO_DIR/target/release/needle" "$APP_DIR/Contents/Resources/bin/needle"
 install -m 0755 "$REPO_DIR/target/release/needle-browser-host" "$APP_DIR/Contents/Resources/bin/needle-browser-host"
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST

@@ -58,6 +58,15 @@ jobs:
           needle doctor --json
           ffmpeg -v error -f lavfi -i sine=frequency=440:duration=1 -y "$RUNNER_TEMP/needle-smoke.mp3"
           ffprobe -v error -show_entries format=duration -of json "$RUNNER_TEMP/needle-smoke.mp3"
+          codesign --verify --deep --strict "$app"
+          "$app/Contents/MacOS/NeedleDesktop" > "$RUNNER_TEMP/needle-launch.log" 2>&1 &
+          app_pid=$!
+          sleep 5
+          if ! kill -0 "$app_pid" 2>/dev/null; then
+            cat "$RUNNER_TEMP/needle-launch.log"
+            exit 1
+          fi
+          kill "$app_pid"
           cp "$app/Contents/Resources/NeedleToolchain.json" dist/
           cp "$app/Contents/Resources/THIRD_PARTY_NOTICES.md" dist/
       - name: Attach draft assets and curated notes

@@ -313,14 +313,23 @@ async fn cmd_get(
     // 8. Tag
     progress_event(events, "tag");
     let pb = spinner("Writing tags...");
-    let fallback_album = metadata.as_ref()
-        .and_then(|m| m.album.clone())
-        .or_else(|| req.album.clone())
-        .or_else(|| infer_album_from_source_title(&selected.title))
-        .or_else(|| infer_album_from_scored_candidates(&scored));
+    let remix_variant_conflict = metadata
+        .as_ref()
+        .is_some_and(|m| requested_variant_conflicts_with_metadata(&req.title, &m.title));
+    let tag_metadata = metadata_for_tagging(metadata.as_ref(), &req.title, req.album.as_deref());
+    let fallback_album = if remix_variant_conflict {
+        req.album.clone()
+    } else {
+        tag_metadata
+            .as_ref()
+            .and_then(|m| m.album.clone())
+            .or_else(|| req.album.clone())
+            .or_else(|| infer_album_from_source_title(&selected.title))
+            .or_else(|| infer_album_from_scored_candidates(&scored))
+    };
 
     // Build canonical title: use metadata title, append (feat. X & Y) if featured_artists present
-    let meta_title_raw = metadata.as_ref().map(|m| {
+    let meta_title_raw = tag_metadata.as_ref().map(|m| {
         let base = m.title.clone();
         if m.featured_artists.is_empty() { base }
         else {
@@ -331,19 +340,19 @@ async fn cmd_get(
     let fallback_title = meta_title_raw
         .unwrap_or_else(|| infer_title_from_source_title(&selected.title, &req.artist)
             .unwrap_or_else(|| title_case_fallback(&req.title)));
-    let fallback_artist = metadata.as_ref()
+    let fallback_artist = tag_metadata.as_ref()
         .map(|m| m.artist.clone())
         .unwrap_or_else(|| title_case_fallback(&req.artist));
 
-    let library_artist = canonical_library_artist(metadata.as_ref(), &req.artist);
+    let library_artist = canonical_library_artist(tag_metadata.as_ref(), &req.artist);
     let tag_plan = tag::TagPlan {
         title: fallback_title,
         artist: fallback_artist,
         album: fallback_album,
         album_artist: Some(library_artist.to_string()),
-        track: metadata.as_ref().and_then(|m| m.track_number),
-        disc: metadata.as_ref().and_then(|m| m.disc_number),
-        date: metadata.as_ref().and_then(|m| m.release_date.clone()),
+        track: tag_metadata.as_ref().and_then(|m| m.track_number),
+        disc: tag_metadata.as_ref().and_then(|m| m.disc_number),
+        date: tag_metadata.as_ref().and_then(|m| m.release_date.clone()),
         source_url: Some(selected.url.clone()),
         ..Default::default()
     };
@@ -802,6 +811,35 @@ fn canonical_library_artist<'a>(
     metadata
         .map(|m| m.artist.as_str())
         .unwrap_or(requested_artist)
+}
+
+fn requested_variant_conflicts_with_metadata(request_title: &str, metadata_title: &str) -> bool {
+    has_mix_variant(request_title)
+        && normalize_for_metadata_match(request_title)
+            != normalize_for_metadata_match(metadata_title)
+}
+
+fn has_mix_variant(value: &str) -> bool {
+    normalize_for_metadata_match(value)
+        .split_whitespace()
+        .any(|word| word == "mix" || word == "remix" || word.ends_with("mix"))
+}
+
+fn metadata_for_tagging(
+    metadata: Option<&needle_core::TrackMetadata>,
+    request_title: &str,
+    request_album: Option<&str>,
+) -> Option<needle_core::TrackMetadata> {
+    let mut metadata = metadata?.clone();
+    if requested_variant_conflicts_with_metadata(request_title, &metadata.title) {
+        metadata.title = clean_title_fragment(request_title);
+        metadata.album = request_album.map(str::to_owned);
+        metadata.featured_artists.clear();
+        metadata.track_number = None;
+        metadata.disc_number = None;
+        metadata.release_date = None;
+    }
+    Some(metadata)
 }
 
 fn filter_compatible_metadata(
@@ -1446,6 +1484,40 @@ esac
             "Big Spender",
         );
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn preserves_explicit_remix_variant_over_base_metadata() {
+        assert!(requested_variant_conflicts_with_metadata(
+            "Nissan Altima (Whethan Remix)",
+            "Nissan Altima",
+        ));
+        assert!(!requested_variant_conflicts_with_metadata(
+            "Nissan Altima (Whethan Remix)",
+            "Nissan Altima (Whethan Remix)",
+        ));
+        assert!(requested_variant_conflicts_with_metadata(
+            "Nissan Altima (Whethan Remix)",
+            "Nissan Altima (Skream Remix)",
+        ));
+
+        let mut base = metadata("Doechii", "Nissan Altima");
+        base.album = Some("Alligator Bites Never Heal Extended".into());
+        base.track_number = Some(13);
+        base.disc_number = Some(1);
+        base.release_date = Some("2024-08-09".into());
+        let tagged = metadata_for_tagging(
+            Some(&base),
+            "Nissan Altima (Whethan Remix)",
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(tagged.title, "Nissan Altima (Whethan Remix)");
+        assert_eq!(tagged.album, None);
+        assert_eq!(tagged.track_number, None);
+        assert_eq!(tagged.disc_number, None);
+        assert_eq!(tagged.release_date, None);
     }
 
     #[test]

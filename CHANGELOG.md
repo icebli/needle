@@ -2,6 +2,20 @@
 
 User-visible changes are collected here for each release. GitHub is the planned sharing and release channel for reviewed source snapshots; Forgejo remains the everyday development remote.
 
+## 0.2.1 — Draft preview
+
+### Fixed
+
+- Explicit remix requests retain their recording identity when the metadata resolver returns the base album track.
+- Packaged apps now locate their bundled Sparkle framework after being copied to Applications, fixing a launch failure caused by a missing framework runtime search path.
+
+### Verification and availability
+
+- Verified the canonical Whethan SoundCloud recording's source quality display (160 kbps and approximately 2 million provider-reported plays) and in-app preview playback progress. These provider values may change.
+- Restarted the save test and verified correctly named remix tags, actual membership in the Needle Spotify playlist, and local playback.
+- This is still an unsigned draft for review. Production sharing requires signing, notarization, compatibility validation, and bundled-tool corresponding sources/notices. In-app updates remain disabled in unsigned previews.
+- The existing 0.2.0 source tag remains unchanged; the packaging fix is delivered under a new version.
+
 ## 0.2.0 — Draft preview
 
 This release is in preparation. The first shared package is planned for Apple Silicon Macs with macOS 15 or later, pending compatibility validation. The current local review package requires macOS 27 because its bundled FFmpeg targets macOS 27; it is not the planned broadly shared artifact. Signing, notarization, and bundled-tool redistribution checks must be completed before a production release is described as ready for friends.
