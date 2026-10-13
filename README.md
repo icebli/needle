@@ -31,8 +31,6 @@ Activity separates local saving from Spotify delivery and shows the confirmed pl
 | Use advanced CLI commands | [CLI guide](docs/CLI.md) |
 | Understand desktop controls | [Desktop guide](docs/desktop.md) |
 | Install the Firefox / Zen extension | [Browser extension](docs/browser-extension.md) |
-| Understand the resolver | [Architecture](docs/architecture.md) |
-| Validate a release | [Release QA](docs/QA.md) |
 | Read user-visible changes | [Changelog](CHANGELOG.md) |
 
 ## Spotify
@@ -43,20 +41,7 @@ Needle captures the playlist name when you search and reports delivery separatel
 
 ## Updates
 
-Needle uses Sparkle for authenticated updates when an update feed is configured. Sparkle's Ed25519 signature is separate from Apple's Developer ID signing, but unsigned updates may still require manual macOS approval. The friend preview keeps automatic checks disabled until that path is tested end to end; use the official releases page for manual updates.
-
-## Source development
-
-For building Needle yourself, install Rust, Swift, `yt-dlp`, FFmpeg, and `ffprobe`:
-
-```bash
-cargo test
-swift test --package-path desktop
-./scripts/install-browser-extension.sh --skip-spotify
-open "$HOME/Applications/Needle.app"
-```
-
-See [the CLI guide](docs/CLI.md) for resolver commands and [the desktop guide](docs/desktop.md) for local development details.
+Choose **Needle → Check for Updates…** when available. If it is unavailable, download a newer version from the official releases page and replace the app in Applications. Your saved music stays in `~/Music/needle`. Unsigned versions may require **Open Anyway** again.
 
 ## License
 

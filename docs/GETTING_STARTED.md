@@ -4,7 +4,7 @@ Needle helps you find the right recording, listen to a preview, and save it to y
 
 ## Get the app
 
-The first shared build is planned for **Apple Silicon Macs (M1 or newer) running macOS 15 Sequoia or later**. This compatibility target still needs verification. Always check the minimum macOS version in the exact release you download. Intel Macs and Windows are not included in this first installer.
+The first shared build is planned for **Apple Silicon Macs (M1 or newer) running macOS 15 Sequoia or later**. Always check the minimum macOS version in the exact release you download. Intel Macs and Windows are not included in this first installer.
 
 1. Open [Needle releases](https://github.com/icebli/needle/releases). Public releases can be downloaded without a GitHub account.
 2. Choose the friend-preview release and download its `.dmg` file from **Assets**. You do not need the “Source code” downloads.
@@ -14,7 +14,7 @@ The first shared build is planned for **Apple Silicon Macs (M1 or newer) running
 
 **Unsigned preview:** this is an intentional early sharing build. It is suitable for invited friends who trust the source, but it does not have Apple's Developer ID identity or notarization ticket. Check the exact release notes for the supported Apple Silicon and macOS versions. Never disable Gatekeeper, run commands that remove quarantine, or install a build from an untrusted mirror.
 
-Release packages are intended to include their audio tools. Check the release notes for the exact package's verification status; the source-development installer has separate requirements. You should not need Rust, Xcode, or Terminal to use a verified packaged build.
+The Mac installer includes its audio tools. You do not need Rust, Xcode, Homebrew, or Terminal to use it.
 
 ## Save your first recording
 
@@ -51,9 +51,9 @@ After delivery, Activity shows the destination playlist and an **Open playlist**
 
 ## Update Needle
 
-In a configured release build, choose **Needle → Check for Updates…** and follow the update window. Sparkle verifies each update with Needle's Ed25519 update key; this is separate from Apple's Developer ID signing. An unsigned app can technically use Sparkle, but macOS may require **Open Anyway** again after the downloaded app is installed, and the update cannot be promised as silent or frictionless. The current friend preview keeps automatic checks disabled until that unsigned-update path has been tested end to end.
+Choose **Needle → Check for Updates…** when available and follow the update window. Unsigned versions may require **System Settings → Privacy & Security → Open Anyway** after an update.
 
-Until an update feed is enabled for your release, update manually: quit Needle, download the newer published release, and drag its app into **Applications**, replacing the old app when Finder asks. Your music is stored separately in **Music → needle**. Never accept an update from a URL outside the official Needle release page.
+If that menu item is unavailable, quit Needle, download a newer version from the official [releases page](https://github.com/icebli/needle/releases), and drag its app into **Applications**, replacing the old app when Finder asks. Your music stays in **Music → needle**.
 
 ## Advanced settings and help
 

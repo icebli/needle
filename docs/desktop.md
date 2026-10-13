@@ -2,24 +2,11 @@
 
 Needle is a macOS companion for bringing recordings into your Spotify local-file library. Search for a recording or supply a source link, review its identity warnings, explicitly select the source, and save tagged audio. Phone transfer is outside this release.
 
-## Build, install and open
+## Find and save a recording
 
-Development prerequisites: macOS 14+, a Swift toolchain, Rust, yt-dlp, ffmpeg and ffprobe. No third-party Swift packages are required.
+Follow [Getting started](GETTING_STARTED.md) to install Needle. In **Add Music**, enter an artist and title or paste a source link, then choose **Find recordings**. Compare the results, preview a candidate, and choose **Save recording** when it matches what you want.
 
-```bash
-./scripts/install-browser-extension.sh --skip-spotify
-open "$HOME/Applications/Needle.app"
-```
-
-This installs the desktop app, its bundled CLI and bridge, the PATH CLI at `~/.cargo/bin/needle`, and the browser native-host copies. `--skip-spotify` preserves Spotify's configuration and companion files. Omitting the flag stages and applies the companion when Spicetify is available, matching the existing installation workflow. `--cli-only` preserves the CLI/browser-only install path without requiring Swift.
-
-For local development, the Codex Run action calls:
-
-```bash
-./script/build_and_run.sh --verify
-```
-
-The build script produces `target/desktop/Needle.app`. This is a locally ad-hoc signed app, not a notarized public distribution. Audio tools must already be installed; the app does not silently download or install them.
+**Activity** shows saving progress and Spotify delivery. **Library** lists your saved recordings; use **Reveal** to find a file in Finder.
 
 ## Preview before saving
 
@@ -50,16 +37,13 @@ needle doctor --json
 needle get --help
 ```
 
-The app confirms a source before starting a download. Its download command uses the selected URL and does not run a replacement source search. The GUI uses `get --strict` to enforce hard rejects even if the source changes after review. The existing CLI direct-URL override remains available for expert users; the desktop app never enables that override.
+Needle saves the source you selected; it does not search again during download. For scripting and direct-URL options, see the [CLI guide](CLI.md).
 
-## Verification
+## Troubleshooting
 
-```bash
-cargo test
-cargo clippy --workspace --all-targets
-swift test --package-path desktop
-node --test browser-extension/tests/*.test.js spicetify/tests/*.test.js
-bash -n scripts/build-desktop.sh script/build_and_run.sh scripts/install-browser-extension.sh
-```
+- **Preview takes a while:** Needle may need to download the source before trimming the excerpt. Try another candidate if the provider fails.
+- **Unknown bitrate or views:** the provider has not supplied that information. Try **Check source quality** for bitrate.
+- **Waiting for Spotify:** keep Spotify open, confirm Local Files includes your Needle folder, and check that the optional companion is active. Retry delivery in Activity rather than saving the track again.
+- **Wrong recording:** compare the title, duration, identity warnings, and preview before saving. Use an exact source link or duration override for difficult matches.
 
-Synthetic tests do not contact Spotify or download real recordings. A real Spotify playback check requires a user-approved recording and a working Spotify setup; source/build/install evidence alone does not establish that result.
+For help, include the app version and exact error message. Keep passwords and account credentials private.
