@@ -4,7 +4,7 @@ Needle helps you find the right recording, listen to a preview, and save it to y
 
 ## Get the app
 
-The first shared build is planned for **Apple Silicon Macs (M1 or newer) running macOS 15 Sequoia or later**. Always check the minimum macOS version in the exact release you download. Intel Macs and Windows are not included in this first installer.
+Needle supports **Apple Silicon Macs (M1 or newer) running macOS 15 Sequoia or later**. Always check the minimum macOS version in the exact release you download. Intel Macs and Windows do not have an installer.
 
 1. Open [Needle releases](https://github.com/icebli/needle/releases). Public releases can be downloaded without a GitHub account.
 2. Choose the latest release and download its `.dmg` file from **Assets**. You do not need the “Source code” downloads.
