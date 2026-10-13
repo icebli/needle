@@ -41,7 +41,7 @@ Needle captures the playlist name when you search and reports delivery separatel
 
 ## Updates
 
-Choose **Needle → Check for Updates…** when available. If it is unavailable, download a newer version from the official releases page and replace the app in Applications. Your saved music stays in `~/Music/needle`. Unsigned versions may require **Open Anyway** again.
+When Needle asks, choose **Check Automatically** and enable **Automatically download and install updates** if you want automatic updates. You can also choose **Needle → Check for Updates…** when available. If it is unavailable, download a newer version from the official releases page and replace the app in Applications. Your saved music stays in `~/Music/needle`. Unsigned versions may require **Open Anyway** again.
 
 ## License
 

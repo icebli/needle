@@ -51,7 +51,7 @@ After delivery, Activity shows the destination playlist and an **Open playlist**
 
 ## Update Needle
 
-Choose **Needle → Check for Updates…** when available and follow the update window. Unsigned versions may require **System Settings → Privacy & Security → Open Anyway** after an update.
+When Needle asks, choose **Check Automatically** and enable **Automatically download and install updates** if you want automatic updates. You can also choose **Needle → Check for Updates…** when available and follow the update window. Unsigned versions may require **System Settings → Privacy & Security → Open Anyway** after an update.
 
 If that menu item is unavailable, quit Needle, download a newer version from the official [releases page](https://github.com/icebli/needle/releases), and drag its app into **Applications**, replacing the old app when Finder asks. Your music stays in **Music → needle**.
 
