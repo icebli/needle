@@ -8,7 +8,7 @@ Needle helps you find the exact recording you want, review the available sources
 
 ## Download the Mac app
 
-The upcoming **Needle 0.2.7 release** is for Apple Silicon Macs. It is unsigned and is not published yet. When it is available, download the `.dmg` from the [GitHub releases page](https://github.com/icebli/needle/releases), then follow [Getting started](docs/GETTING_STARTED.md). macOS may require **System Settings → Privacy & Security → Open Anyway** on first launch. Never disable Gatekeeper or remove quarantine attributes.
+The upcoming **Needle 0.2.8 release** is for Apple Silicon Macs. It is unsigned and is not published yet. When it is available, download the `.dmg` from the [GitHub releases page](https://github.com/icebli/needle/releases), then follow [Getting started](docs/GETTING_STARTED.md). macOS may require **System Settings → Privacy & Security → Open Anyway** on first launch. Never disable Gatekeeper or remove quarantine attributes.
 
 The packaged app includes the audio tools, so friends do not need Rust, Python, Xcode, or Homebrew. Check the exact release notes for its minimum macOS version.
 

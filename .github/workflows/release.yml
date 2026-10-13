@@ -89,7 +89,7 @@ jobs:
           app="$GITHUB_WORKSPACE/target/desktop/Needle.app"
           mkdir -p dist/third-party
           scripts/collect-third-party-sources.sh "$app" dist/third-party --download-sources
-          python3 -c 'import json; m=json.load(open("dist/third-party/THIRD_PARTY_SOURCE_MANIFEST.json")); assert m["corresponding_source_status"] == "complete", "Incomplete corresponding sources"; assert not m.get("unowned_bundled_libraries"), "Unowned bundled libraries"; assert all(s["status"] == "verified" for s in m["sources"]), "Unverified source materials"'
+          python3 -c 'import json; m=json.load(open("dist/third-party/THIRD_PARTY_SOURCE_MANIFEST.json")); print("Source status:", m["corresponding_source_status"]); print("Unverified:", [(s["component"],s["status"]) for s in m["sources"] if s["status"] != "verified"]); assert m["corresponding_source_status"] == "complete", "Incomplete corresponding sources"; assert not m.get("unowned_bundled_libraries"), "Unowned bundled libraries"; assert all(s["status"] == "verified" for s in m["sources"]), "Unverified source materials"'
           cp dist/third-party/THIRD_PARTY_SOURCE_MANIFEST.json dist/
           cp dist/third-party/THIRD_PARTY_SOURCE_MATERIALS.md dist/
           tar -czf dist/Needle-third-party-provenance.tar.gz -C dist/third-party .
@@ -107,3 +107,11 @@ jobs:
           fi
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
           gh release upload "$RELEASE_TAG" dist/*.dmg dist/SHA256SUMS.txt dist/NeedleToolchain.json dist/THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_SOURCE_MANIFEST.json dist/THIRD_PARTY_SOURCE_MATERIALS.md dist/Needle-third-party-provenance.tar.gz --clobber
+      - name: Retain installer and source diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: needle-release-materials
+          path: dist/
+          if-no-files-found: ignore
+          retention-days: 14

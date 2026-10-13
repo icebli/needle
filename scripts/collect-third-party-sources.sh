@@ -122,6 +122,7 @@ for lib in sorted((app / "Contents/Resources/lib").glob("*.dylib")):
     bundled_libs.append({"path": str(lib.relative_to(app)), "sha256": sha256(lib), "owners": owners})
 owner_names = sorted({owner for item in bundled_libs for owner in item["owners"]})
 unowned_libs = [item["path"] for item in bundled_libs if not item["owners"]]
+source_formula_names = list(dict.fromkeys([*names, *owner_names]))
 if all_formula_names != names:
     dependency_info = {item["name"]: item for item in brew_json(*all_formula_names).get("formulae", [])}
 
@@ -224,7 +225,7 @@ if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
         raise SystemExit("unowned bundled Homebrew libraries: " + ", ".join(unowned_libs))
     source_dir.mkdir(parents=True, exist_ok=True)
     license_dir.mkdir(parents=True, exist_ok=True)
-    for formula_name in all_formula_names:
+    for formula_name in source_formula_names:
         item = dependency_info.get(formula_name)
         if not item:
             raise SystemExit(f"missing Homebrew formula metadata for {formula_name}")
