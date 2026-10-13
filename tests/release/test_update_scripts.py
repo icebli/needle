@@ -67,7 +67,7 @@ class UpdateScriptTests(unittest.TestCase):
         self.assertIn("missing Homebrew source checksum and git revision", source)
         self.assertIn("unowned bundled Homebrew libraries", source)
         self.assertIn("Homebrew version mismatch", source)
-        self.assertIn("pinned-release-tag-and-package-resolved-revision", source)
+        self.assertIn("pinned-package-resolved-revision", source)
 
     def test_wrong_or_mixed_archives_never_reach_signing(self):
         with tempfile.TemporaryDirectory() as directory:

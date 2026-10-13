@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "needle-browser-host"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "directories",
@@ -956,7 +956,7 @@ dependencies = [
 
 [[package]]
 name = "needle-cli"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "needle-core"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "directories",
