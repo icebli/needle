@@ -68,9 +68,9 @@ chmod 0755 "$BIN_DIR/yt-dlp"
 install -m 0755 "$FFMPEG_PATH" "$BIN_DIR/ffmpeg"
 install -m 0755 "$FFPROBE_PATH" "$BIN_DIR/ffprobe"
 install -m 0755 "$NODE_PATH" "$BIN_DIR/node"
-for tool in "$BIN_DIR/ffmpeg" "$BIN_DIR/ffprobe" "$BIN_DIR/node"; do
-  /usr/bin/codesign --remove-signature "$tool" 2>/dev/null || true
-done
+# Keep the existing Mach-O signature layout while rewriting load commands.
+# Removing it first can leave LINKEDIT padding that older tools cannot parse.
+# All relocated copies are signed again before their first execution below.
 
 copy_dependency() {
   local owner="$1" dep="$2" owner_dir="$3" base source target
@@ -84,7 +84,6 @@ copy_dependency() {
   source="$dep"
   [[ -f "$source" ]] || { echo "unresolved non-system dependency for $owner: $dep" >&2; exit 1; }
   install -m 0644 "$source" "$target"
-  /usr/bin/codesign --remove-signature "$target" 2>/dev/null || true
   install_name_tool -id "@loader_path/$base" "$target"
   patch_binary "$target" dylib
 }

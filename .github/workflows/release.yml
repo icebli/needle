@@ -29,7 +29,12 @@ jobs:
           test -s "docs/releases/$RELEASE_TAG.md"
           echo "NEEDLE_APP_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
       - name: Install build prerequisites
-        run: brew install rust ffmpeg node
+        run: |
+          # The runner defaults to Xcode 16.4, whose Mach-O rewriting tools
+          # cannot process some libraries in current Homebrew bottles.
+          sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+          xcodebuild -version
+          brew install rust ffmpeg node
       - name: Fetch pinned standalone yt-dlp and verify checksum
         run: |
           mkdir -p target/release-tools

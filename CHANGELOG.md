@@ -2,6 +2,11 @@
 
 User-visible changes are collected here for each release. GitHub is the planned sharing and release channel for reviewed source snapshots; Forgejo remains the everyday development remote.
 
+## 0.2.3 — Draft preview
+
+- Selects a current Xcode toolchain for release packaging, so Homebrew libraries can be relocated into the app on the macOS 15 build runner.
+- Keeps bundled-tool signatures until relocation is complete, then signs the finished copies.
+
 ## 0.2.2 — Draft preview
 
 - Updated quinn-proto to 0.11.15 to address its reported remote memory exhaustion vulnerability.
