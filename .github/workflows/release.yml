@@ -34,7 +34,7 @@ jobs:
           # cannot process some libraries in current Homebrew bottles.
           sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
           xcodebuild -version
-          brew install rust ffmpeg node
+          brew install rust ffmpeg
       - name: Fetch pinned standalone yt-dlp and verify checksum
         run: |
           mkdir -p target/release-tools
@@ -45,6 +45,13 @@ jobs:
           test -s selected.sha256
           shasum -a 256 -c selected.sha256
           chmod +x yt-dlp_macos
+          curl --fail --location --retry 3 -o node.tar.xz https://nodejs.org/dist/v24.14.1/node-v24.14.1-darwin-arm64.tar.xz
+          curl --fail --location --retry 3 -o node-checksums.txt https://nodejs.org/dist/v24.14.1/SHASUMS256.txt
+          awk '$2 == "node-v24.14.1-darwin-arm64.tar.xz" {print $1 "  node.tar.xz"}' node-checksums.txt > node.sha256
+          test -s node.sha256
+          shasum -a 256 -c node.sha256
+          tar -xf node.tar.xz
+          ./node-v24.14.1-darwin-arm64/bin/node --version
       - name: Verify source
         run: |
           cargo test --locked
@@ -55,6 +62,7 @@ jobs:
       - name: Package preview installer
         env:
           NEEDLE_YTDLP_PATH: ${{ github.workspace }}/target/release-tools/yt-dlp_macos
+          NEEDLE_NODE_PATH: ${{ github.workspace }}/target/release-tools/node-v24.14.1-darwin-arm64/bin/node
         run: scripts/package-desktop.sh --version "$NEEDLE_APP_VERSION" --format dmg
       - name: Verify bundled toolchain without Homebrew on PATH
         run: |

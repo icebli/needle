@@ -15,7 +15,7 @@ Needle's desktop app lets you review recording sources, listen to previews, comp
 - [What's new](CHANGELOG.md)
 - [Release QA checks](docs/QA.md)
 
-The first shared installer is planned for **Apple Silicon Macs with macOS 15 or later**, subject to verification of its bundled tools. Check the exact release's minimum macOS version: the current local review build requires macOS 27 because of its bundled FFmpeg. Version 0.2.3 is being prepared as a draft preview; a signed, notarized release is not available yet. A verified release package is intended to include the audio tools, so friends can use the app without a development toolchain. Check each release's verification notes before sharing it.
+The first shared installer is planned for **Apple Silicon Macs with macOS 15 or later**, subject to verification of its bundled tools. Check the exact release's minimum macOS version: the current local review build requires macOS 27 because of its bundled FFmpeg. Version 0.2.4 is being prepared as a draft preview; a signed, notarized release is not available yet. A verified release package is intended to include the audio tools, so friends can use the app without a development toolchain. Check each release's verification notes before sharing it.
 
 Needle includes Sparkle update support through **Needle → Check for Updates…**. It is enabled only for configured release builds; unsigned previews keep it disabled. The update feed must contain Developer ID signed, notarized artifacts with Sparkle update signatures. No production update is available yet.
 

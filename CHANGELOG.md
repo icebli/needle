@@ -2,6 +2,10 @@
 
 User-visible changes are collected here for each release. GitHub is the planned sharing and release channel for reviewed source snapshots; Forgejo remains the everyday development remote.
 
+## 0.2.4 — Draft preview
+
+- Bundles a checksum-verified official standalone Node.js runtime, avoiding an external Homebrew libnode dependency.
+
 ## 0.2.3 — Draft preview
 
 - Selects a current Xcode toolchain for release packaging, so Homebrew libraries can be relocated into the app on the macOS 15 build runner.
