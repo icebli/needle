@@ -1,6 +1,6 @@
 # Changelog
 
-User-visible changes are collected here for each release. GitHub is the planned sharing and release channel for reviewed source snapshots; Forgejo remains the everyday development remote.
+User-visible changes for each release.
 
 ## 0.2.5 — Unsigned friend preview
 
@@ -51,8 +51,7 @@ This release is in preparation. The first shared package is planned for Apple Si
 - Named Spotify playlist destinations, delivery status, and an Open playlist action.
 - Advanced desktop settings and continued access to the full CLI.
 - Sparkle update support and a Check for Updates menu item, gated on a configured signed release and a verified update feed.
-- Release packaging scripts, a beginner setup guide, and a documented secondary GitHub release workflow.
-- Curated GitHub source exports with separate release-only history and required secret/private-data scans before public sharing.
+- A beginner setup guide and Mac release packaging.
 
 ### Improved
 
