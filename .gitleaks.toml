@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public RSA key used only to keep Chrome extension ID stable"
+regexTarget = "secret"
+regexes = [
+  '''^MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA35pNfO6HXFcY4ew5gSxpBHWuuw6Dy64hbTGscbYqPw4\+lC6IkjRqS5iZNIFBOWFlvHpJlWt7KwfdgzoTjOIes1PPCWA1DaCnrtMicGWokjCEDSjxU6n67\+eXWIzl74fds0JaPdYqChOJVYYyPUaklf3ANkkXElL64PGKFdwQUQYiKorUorBsFfDa7CiW62LfrNzk2ZWLD/nliUc4uBHpzFvbhJnYDzKqUQkKFW0o3enAq69iX9KtHyGk2CBKnx9jizAxnDkUIk7ubtQUr7XgTOj5w1jmCxZ3ijKVgpNjG0/1\+LSJR6jWem/rwtoY/kmLCACobTeCG5fYxIgDwEG83QIDAQAB$'''
+]

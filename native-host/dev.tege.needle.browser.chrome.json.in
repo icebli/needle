@@ -1,0 +1,7 @@
+{
+  "name": "dev.tege.needle.browser",
+  "description": "Needle browser extension native messaging host",
+  "path": "__NEEDLE_BROWSER_HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://oljnldpeaookagcidchhjmlkocoglhia/"]
+}

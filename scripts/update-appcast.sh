@@ -60,7 +60,8 @@ for entity in data.get("system-entities", []):
     }
     preview_app="$mount_point/Needle.app"
     codesign --verify --deep --strict "$preview_app"
-    codesign -dv "$preview_app" 2>&1 | grep -q '^Signature=adhoc$' || {
+    signature_details="$(codesign -dv "$preview_app" 2>&1)"
+    grep -q '^Signature=adhoc$' <<< "$signature_details" || {
       echo "Preview update must contain an ad-hoc signed Needle.app: $archive" >&2; exit 1;
     }
     python3 - "$preview_app/Contents/Info.plist" "$VERSION" "$REPO_DIR/desktop/Resources/UpdatePublicKey.txt" <<'PY'
@@ -83,7 +84,8 @@ PY
     trap - EXIT
   else
     codesign --verify --strict "$archive"
-    codesign -dv "$archive" 2>&1 | grep -q 'Authority=Developer ID Application:' || {
+    signature_details="$(codesign -dv "$archive" 2>&1)"
+    grep -q 'Authority=Developer ID Application:' <<< "$signature_details" || {
       echo "Update archives require Developer ID signatures: $archive" >&2; exit 1;
     }
     xcrun stapler validate "$archive"

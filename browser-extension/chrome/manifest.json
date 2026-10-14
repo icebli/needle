@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Needle",
+  "version": "0.2.8",
+  "description": "Send the current recording to Needle and optionally add the cleaned local file to Spotify.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA35pNfO6HXFcY4ew5gSxpBHWuuw6Dy64hbTGscbYqPw4+lC6IkjRqS5iZNIFBOWFlvHpJlWt7KwfdgzoTjOIes1PPCWA1DaCnrtMicGWokjCEDSjxU6n67+eXWIzl74fds0JaPdYqChOJVYYyPUaklf3ANkkXElL64PGKFdwQUQYiKorUorBsFfDa7CiW62LfrNzk2ZWLD/nliUc4uBHpzFvbhJnYDzKqUQkKFW0o3enAq69iX9KtHyGk2CBKnx9jizAxnDkUIk7ubtQUr7XgTOj5w1jmCxZ3ijKVgpNjG0/1+LSJR6jWem/rwtoY/kmLCACobTeCG5fYxIgDwEG83QIDAQAB",
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "nativeMessaging",
+    "notifications",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Download with Needle",
+    "default_popup": "popup.html",
+    "default_icon": { "48": "icons/needle-48.png", "96": "icons/needle-96.png" }
+  },
+  "icons": { "48": "icons/needle-48.png", "96": "icons/needle-96.png" },
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*", "*://youtu.be/*", "*://*.soundcloud.com/*"],
+      "js": ["browser-compat.js", "context-capture.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

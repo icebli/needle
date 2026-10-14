@@ -1,23 +1,36 @@
-# Firefox / Zen extension
+# Browser companion
 
-The Needle extension sends a user-selected media page to the local Needle CLI. It never searches for a second source: the page or link selected in Firefox becomes `needle get --url`'s immutable candidate. Needle still resolves authoritative metadata, applies its hard identity checks, writes cleaned tags, moves the file into the library, and writes provenance.
+The Needle browser companion sends a user-selected media page to the local Needle CLI. It never searches for a second source: the page or link selected in the browser becomes `needle get --url`'s immutable candidate. Needle still resolves authoritative metadata, applies its hard identity checks, writes cleaned tags, moves the file into the library, and writes provenance.
 
-## Advanced installation on macOS
+The automatic Spotify playlist feature also uses a small Spicetify companion. Install [Spicetify from its official site](https://spicetify.app/) first, then return here to install Needle's companion and browser bridge.
 
-Prerequisites:
+## Install the companion bundle
 
-- A Needle source checkout, Rust, and Firefox or Zen
-- `yt-dlp`, `ffmpeg`, and `ffprobe`
-- Spicetify when Spotify playlist sync is wanted
-- Spotify local files enabled and pointed at `~/Music/needle`
+The latest [Needle release](https://github.com/icebli/needle/releases) includes `needle-companion.zip` in **Assets**. It contains the Chrome extension, a Firefox/Zen package, the optional Spicetify companion, and an installer that uses the native host bundled inside Needle.app. Unzip it into its own permanent folder, such as `Downloads/needle-companion`, so the browser can keep using the files.
 
-Run:
+1. Install Needle in `/Applications` or `~/Applications` first.
+2. Download and unzip `needle-companion.zip`.
+3. Double-click **Install Needle Companion.command** and press Return when it finishes. The installer registers the native bridge for Chrome, Firefox, and Zen and opens Chrome's extensions page.
+4. In Chrome, enable **Developer mode** at `chrome://extensions`, choose **Load unpacked**, and select the bundle's `chrome-extension` folder. Chrome requires this developer-mode installation because the companion is not distributed through the Chrome Web Store. Keep that folder in place after loading it.
+5. In Firefox or Zen, open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and select the included `needle-firefox.xpi`. The unsigned extension is temporary and must be loaded again after each browser restart; the native bridge remains installed.
+
+The companion installer does not change Spotify by default. After installing [Spicetify](https://spicetify.app/) with its [official installation guide](https://spicetify.app/docs/advanced-usage/installation/), run the installer with `--setup-spicetify`:
+
+```bash
+"$HOME/Downloads/needle-companion/Install Needle Companion.command" --setup-spicetify
+```
+
+If you chose another folder, replace the path with that folder's location. In Finder, you can open Terminal, type the opening quote and path, drag **Install Needle Companion.command** into the Terminal window, then type ` --setup-spicetify` and press Return. This copies Needle's Spotify companion into Spicetify and applies it. Restart Spotify if it was open. Ordinary Spotify Local Files playback does not require this step.
+
+## Advanced source installation
+
+For contributors or users who want to build the browser bridge themselves, use a Needle source checkout with Rust installed and run:
 
 ```bash
 ./scripts/install-browser-extension.sh
 ```
 
-The installer builds release binaries, installs the Firefox native-messaging manifest under `~/Library/Application Support/Mozilla/NativeMessagingHosts`, installs and applies the Spicetify companion, and creates `target/browser-extension/needle-firefox.xpi`.
+The installer builds release binaries, installs the Firefox, Zen, and Chrome native-messaging manifests, installs and applies the Spicetify companion, and creates `target/browser-extension/needle-firefox.xpi` plus `target/browser-extension/needle-chrome.zip`.
 
 Firefox-derived production builds normally require signed extensions. For temporary use in Firefox or Zen, open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on**, and select `browser-extension/manifest.json`. The native host and Spicetify companion persist; only the temporary browser add-on must be reloaded after a browser restart.
 

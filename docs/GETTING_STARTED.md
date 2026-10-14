@@ -41,9 +41,18 @@ This local-file workflow does not require Spicetify. Leave **“Add to [playlist
 
 ### Optional automatic playlist delivery
 
-Automatic delivery additionally requires Spicetify **and the Needle companion installed and active in Spotify**. Having Spicetify alone is not enough. The desktop app and drag-to-Applications installer do not silently modify Spotify. See the [companion setup guide](browser-extension.md) if you want this advanced integration.
+Automatic delivery additionally requires [Spicetify](https://spicetify.app/) **and the Needle companion installed and active in Spotify**. Spicetify is a Spotify customization tool that lets local extensions run inside the Spotify desktop app. Having Spicetify alone is not enough.
 
-In Needle's **Settings**, choose the default playlist name; the initial default is **Needle**. The destination is captured when you search, so run a new search after changing it. Saving with delivery enabled queues that recording for the named playlist. Automatic delivery currently supports MP3.
+Set it up once:
+
+1. Install [Spicetify using its official installation guide](https://spicetify.app/docs/advanced-usage/installation/). Follow the instructions for your Mac and restart Spotify when prompted.
+2. Install the [Needle companion bundle](browser-extension.md). Its installer registers the browser bridge using the Needle app already in **Applications**. To enable playlist sync, rerun that installer with `--setup-spicetify` after Spicetify is installed.
+3. Keep Spotify open, enable Spotify Local Files, and confirm that `~/Music/needle` is one of its local-file sources.
+4. In Needle's **Settings**, choose the default playlist name. The initial default is **Needle**. Run a new search after changing it so the destination is captured with the search.
+
+The desktop app does not silently install or modify Spicetify. If you only want local playback, skip this section and turn off **Add to [playlist] in Spotify after saving**.
+
+Saving with delivery enabled queues the recording for the named playlist. Automatic delivery currently supports MP3.
 
 **Saved** means the file is on your Mac. **Waiting for Spotify** means playlist delivery has not been acknowledged yet. Spotify may need several minutes to index a new local file. Keep Spotify open, check its Local Files settings, and use **Check Spotify** in Activity when available. Do not download the recording again merely because delivery is waiting.
 

@@ -93,6 +93,10 @@ jobs:
           cp dist/third-party/THIRD_PARTY_SOURCE_MANIFEST.json dist/
           cp dist/third-party/THIRD_PARTY_SOURCE_MATERIALS.md dist/
           tar -czf dist/Needle-third-party-provenance.tar.gz -C dist/third-party .
+      - name: Package browser companion
+        run: |
+          scripts/package-browser-companion.sh
+          cp target/browser-extension/needle-companion.zip dist/
       - name: Attach draft assets and curated notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,13 +104,13 @@ jobs:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           cd dist
-          shasum -a 256 *.dmg > SHA256SUMS.txt
+          shasum -a 256 *.dmg needle-companion.zip > SHA256SUMS.txt
           cd ..
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "Needle $NEEDLE_APP_VERSION" --notes-file "docs/releases/$RELEASE_TAG.md"
           fi
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-          gh release upload "$RELEASE_TAG" dist/*.dmg dist/SHA256SUMS.txt dist/NeedleToolchain.json dist/THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_SOURCE_MANIFEST.json dist/THIRD_PARTY_SOURCE_MATERIALS.md dist/Needle-third-party-provenance.tar.gz --clobber
+          gh release upload "$RELEASE_TAG" dist/*.dmg dist/needle-companion.zip dist/SHA256SUMS.txt dist/NeedleToolchain.json dist/THIRD_PARTY_NOTICES.md dist/THIRD_PARTY_SOURCE_MANIFEST.json dist/THIRD_PARTY_SOURCE_MATERIALS.md dist/Needle-third-party-provenance.tar.gz --clobber
       - name: Retain installer and source diagnostics
         if: always()
         uses: actions/upload-artifact@v4

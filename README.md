@@ -30,12 +30,23 @@ Activity separates local saving from Spotify delivery and shows the confirmed pl
 | Set up Spotify Local Files | [Getting started — Spotify](docs/GETTING_STARTED.md#listen-in-spotify) |
 | Use advanced CLI commands | [CLI guide](docs/CLI.md) |
 | Understand desktop controls | [Desktop guide](docs/desktop.md) |
-| Install the Firefox / Zen extension | [Browser extension](docs/browser-extension.md) |
+| Install the Chrome / Firefox / Zen companion | [Browser companion](docs/browser-extension.md) |
 | Read user-visible changes | [Changelog](CHANGELOG.md) |
+
+## Quick start
+
+1. Download the latest [Needle release](https://github.com/icebli/needle/releases) and move Needle to **Applications**.
+2. Open Needle, approve **Open Anyway** in **System Settings → Privacy & Security** if macOS asks, then search for a recording.
+3. Preview a candidate, choose **Save recording**, and wait for the file to appear in `~/Music/needle`.
+4. In Spotify desktop, enable **Local Files** and add `~/Music/needle` as a source. Spotify can play these files without any extra integration.
+
+For automatic playlist delivery, install [Spicetify](https://spicetify.app/) using its [official installation guide](https://spicetify.app/docs/advanced-usage/installation/), then follow the [Spotify companion setup](docs/GETTING_STARTED.md#optional-automatic-playlist-delivery). Spicetify is an optional Spotify customization tool; Needle does not need it for ordinary Local Files playback.
+
+To capture tracks from Chrome, Firefox, or Zen, download `needle-companion.zip` from the latest release and follow the [browser companion setup](docs/browser-extension.md). The companion bundle includes its own installer and does not require Rust or a source checkout.
 
 ## Spotify
 
-Spotify's desktop Local Files feature works without Spicetify. Enable Local Files, add `~/Music/needle` as a source, and let Spotify index each saved recording. Optional automatic playlist delivery requires Spotify, Spicetify, and the Needle companion; Spicetify alone is not enough.
+Spotify's desktop Local Files feature works without Spicetify. Enable Local Files, add `~/Music/needle` as a source, and let Spotify index each saved recording. Optional automatic playlist delivery requires Spotify, [Spicetify](https://spicetify.app/), and the Needle companion; [Spicetify alone is not enough](docs/GETTING_STARTED.md#optional-automatic-playlist-delivery).
 
 Needle captures the playlist name when you search and reports delivery separately from saving. A waiting status means Spotify is still indexing or the companion has not acknowledged the file; retry delivery from Activity instead of downloading again.
 
