@@ -21,7 +21,12 @@ final class AppModel {
     var message: String?
     var selectedCandidateID: String?
     var pollingJobIDs: Set<UUID> = []
+    var isScanningLibrary = false
+    var libraryScanError: String?
+    var libraryScanWarnings: [String] = []
+    var libraryImportedCount = 0
     let cli = NeedleCLIService()
+    let libraryScan = LibraryScanService()
     let spotify = SpotifyHostService()
     var isBusy: Bool { isSearching || isSaving }
 
@@ -82,6 +87,27 @@ final class AppModel {
         metadata = nil
         requestSnapshot = nil
         selectedCandidateID = nil
+    }
+
+    func scanLibrary() {
+        guard !isScanningLibrary else { return }
+        isScanningLibrary = true
+        libraryScanError = nil
+        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Music/needle", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let snapshot = settings.value
+        Task {
+            let result = await libraryScan.scan(root: root, settings: snapshot, history: history)
+            isScanningLibrary = false
+            switch result {
+            case .success(let summary):
+                libraryImportedCount = summary.imported
+                libraryScanWarnings = summary.warnings
+            case .failure(let error):
+                libraryScanError = error.localizedDescription
+                libraryScanWarnings = []
+            }
+        }
     }
 
     func cancelCurrentOperation() {
@@ -185,6 +211,9 @@ final class AppModel {
             return
         }
         var pending = track
+        // A user explicitly requested Spotify delivery for an imported file;
+        // promote it into normal Activity tracking from this point onward.
+        pending.discoveredFromFolder = false
         pending.spotifyStatus = .pending
         pending.spotifyPlaylistName = track.spotifyPlaylistName ?? track.settingsSnapshot?.playlistName ?? settings.value.playlistName
         pending.spotifyPlaylistURI = nil

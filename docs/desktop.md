@@ -12,7 +12,7 @@ Drag a source link from your browser onto any tab to add it to **Review Queue**.
 
 **Library → Repair** edits embedded tags and artwork in place, with a backup before each change. Metadata and original-source artwork are suggestions you approve. See [Getting started](GETTING_STARTED.md#repair-a-saved-recording).
 
-**Activity** shows saving progress and Spotify delivery. **Library** lists your saved recordings; use **Reveal** to find a file in Finder.
+**Activity** shows saving progress and Spotify delivery. **Library** scans `~/Music/needle` when opened, including existing recordings saved through the CLI. Choose **Refresh** after adding files outside the app. Embedded tags supply artist, song, and album; filenames are used when tags are missing. Scanning does not change audio files, and backup/temporary files are skipped. Use **Show in Finder** to find a file.
 
 ## Preview before saving
 

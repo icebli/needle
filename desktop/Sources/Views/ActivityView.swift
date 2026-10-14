@@ -17,11 +17,12 @@ struct ActivityView: View {
                         .disabled(model.isCancelling)
                 }
             }
-            if model.history.tracks.isEmpty {
+            let activityTracks = model.history.tracks.filter { $0.discoveredFromFolder != true }
+            if activityTracks.isEmpty {
                 ContentUnavailableView("Your collection starts here", systemImage: "tray",
                                        description: Text("Find and approve a recording in Add Music."))
             } else {
-                List(model.history.tracks) { track in TrackRow(track: track, model: model) }.listStyle(.inset)
+                List(activityTracks) { track in TrackRow(track: track, model: model) }.listStyle(.inset)
             }
         }.padding(32)
     }

@@ -37,15 +37,75 @@ final class NeedleDesktopTests: XCTestCase {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(track)) as? [String: Any])
         object.removeValue(forKey: "spotifyPlaylistName")
         object.removeValue(forKey: "spotifyPlaylistURI")
+        object.removeValue(forKey: "discoveredFromFolder")
         let decoded = try JSONDecoder().decode(TrackRequest.self, from: JSONSerialization.data(withJSONObject: object))
         XCTAssertNil(decoded.spotifyPlaylistName)
         XCTAssertNil(decoded.spotifyPlaylistURI)
+        XCTAssertNil(decoded.discoveredFromFolder)
     }
     func testCLIParsesFinalJSONAfterHumanOutput() throws { let data = Data("progress: saving\n{\"ok\":true,\"tools\":[{\"name\":\"ffmpeg\",\"ok\":true}]}\n".utf8); let response = try NeedleCLIService.parseLastJSON(DoctorResponse.self, data: data); XCTAssertTrue(response.ok); XCTAssertEqual(response.tools.first?.name, "ffmpeg") }
     func testSearchCandidateDecodesRustThumbnailField() throws {
         let data = Data(#"{"ok":true,"request":{"artist":"Artist","title":"Title"},"metadata":null,"candidates":[{"candidate":{"provider":"youtube","id":"abc123","url":"https://youtube.com/watch?v=abc123","title":"Artist - Title","uploader":"Artist","duration_ms":200000,"thumbnail_url":"https://i.ytimg.com/vi/abc123/hqdefault.jpg"},"score":{"confidence":96,"status":"recommended","positives":[],"warnings":[],"rejects":[]}}]}"#.utf8)
         let response = try NeedleCLIService.parseLastJSON(SearchResponse.self, data: data)
         XCTAssertEqual(response.candidates.first?.candidate.thumbnailURL, "https://i.ytimg.com/vi/abc123/hqdefault.jpg")
+    }
+    func testLibraryScanDecodesTracksAndWarnings() throws {
+        let data = Data(#"{"ok":true,"tracks":[{"path":"/tmp/Artist/Song.mp3","artist":"Artist","title":"Song","album":"Album","sourceUrl":"https://example.com/song","modifiedMs":1700000000000}],"warnings":["skipped backup"]}"#.utf8)
+        let response = try NeedleCLIService.parseLastJSON(NeedleCLIService.LibraryScanResponse.self, data: data)
+        XCTAssertEqual(response.tracks.first?.sourceURL, "https://example.com/song")
+        XCTAssertEqual(response.warnings, ["skipped backup"])
+    }
+
+    func testLibraryScanFallbackUsesFolderAndFilenameMetadata() throws {
+        let item = NeedleCLIService.LibraryScanTrack(path: "/tmp/Artist/Track.aiff", artist: nil, title: nil, album: nil, sourceURL: nil, modifiedMs: nil)
+        let track = try XCTUnwrap(LibraryScanService.track(from: item))
+        XCTAssertEqual(track.artist, "Artist")
+        XCTAssertEqual(track.title, "Track")
+        XCTAssertEqual(track.album, "")
+        XCTAssertEqual(track.settingsSnapshot?.format, "aiff")
+        XCTAssertTrue(track.discoveredFromFolder == true)
+    }
+
+    func testLibraryMergeDeduplicatesPathAndPreservesDeliveryState() {
+        let defaults = isolatedDefaults()
+        let store = HistoryStore(defaults: defaults)
+        let existing = TrackRequest(id: UUID(), artist: "Old", title: "Old title", sourceURL: "https://example.com/source", savedPath: "/tmp/Artist/Song.mp3", spotifyStatus: .added, spotifyJobID: "job", spotifyPlaylistName: "Needle", spotifyPlaylistURI: "spotify:playlist:abc", stage: .spotifyAdded)
+        store.upsert(existing)
+        let discovered = TrackRequest(artist: "Artist", title: "Song", album: "Album", savedPath: "/tmp/Artist/./Song.mp3", stage: .saved, settingsSnapshot: NeedleSettings(), date: .now, discoveredFromFolder: true)
+
+        XCTAssertEqual(store.mergeLibraryTracks([discovered]), 0)
+        XCTAssertEqual(store.tracks.count, 1)
+        let merged = store.tracks[0]
+        XCTAssertEqual(merged.id, existing.id)
+        XCTAssertEqual(merged.artist, "Artist")
+        XCTAssertEqual(merged.title, "Song")
+        XCTAssertEqual(merged.spotifyStatus, .added)
+        XCTAssertEqual(merged.spotifyPlaylistURI, "spotify:playlist:abc")
+        XCTAssertFalse(merged.discoveredFromFolder == true)
+        XCTAssertEqual(store.mergeLibraryTracks([discovered]), 0)
+    }
+
+    func testLibraryMergeDoesNotOverwriteInFlightMetadata() {
+        let defaults = isolatedDefaults()
+        let store = HistoryStore(defaults: defaults)
+        let existing = TrackRequest(artist: "Requested", title: "Requested title", savedPath: "/tmp/in-flight.mp3", stage: .download)
+        store.upsert(existing)
+        let discovered = TrackRequest(artist: "Tagged", title: "Tagged title", savedPath: "/tmp/in-flight.mp3", stage: .saved, discoveredFromFolder: true)
+
+        XCTAssertEqual(store.mergeLibraryTracks([discovered]), 0)
+        XCTAssertEqual(store.tracks.first?.artist, "Requested")
+        XCTAssertEqual(store.tracks.first?.stage, .download)
+    }
+
+    func testLibraryMergeAllowsAConfirmedEmptyAlbum() {
+        let defaults = isolatedDefaults()
+        let store = HistoryStore(defaults: defaults)
+        let existing = TrackRequest(artist: "Artist", title: "Title", album: "Stale Album", savedPath: "/tmp/empty-album.mp3", stage: .saved)
+        store.upsert(existing)
+        let discovered = TrackRequest(artist: "Artist", title: "Title", album: "", savedPath: "/tmp/empty-album.mp3", stage: .saved, discoveredFromFolder: true)
+
+        XCTAssertEqual(store.mergeLibraryTracks([discovered]), 0)
+        XCTAssertEqual(store.tracks.first?.album, "")
     }
     func testPreviewUsesExactSourceAndDownloadsFullTrack() {
         let args = AudioPreviewService.previewArguments(sourceURL: "https://example.com/watch?v=abc", outputTemplate: "/tmp/excerpt.%(ext)s")
@@ -129,6 +189,20 @@ final class NeedleDesktopTests: XCTestCase {
 
         XCTAssertEqual(model.history.tracks.count, 0)
         XCTAssertEqual(model.message, "Automatic Spotify delivery is available for MP3. This advanced output remains saved in your library.")
+    }
+
+    @MainActor
+    func testExplicitSpotifyDeliveryPromotesImportedTrackToActivity() {
+        let defaults = isolatedDefaults()
+        let model = AppModel(defaults: defaults)
+        var settings = model.settings.value
+        settings.format = "mp3"
+        let track = TrackRequest(artist: "Artist", title: "Title", sourceURL: "https://example.com/track", savedPath: "/tmp/track.mp3", stage: .saved, settingsSnapshot: settings, discoveredFromFolder: true)
+
+        model.enqueue(track)
+
+        XCTAssertEqual(model.history.tracks.first?.discoveredFromFolder, false)
+        XCTAssertEqual(model.history.tracks.first?.spotifyStatus, .pending)
     }
 
     func testHistoryStoreMarksEveryInFlightStageInterruptedOnReload() {

@@ -36,6 +36,47 @@ final class HistoryStore {
         tracks.removeAll { $0.id == track.id }
         tracks.insert(track, at: 0)
     }
+
+    /// Merge files found on disk without changing the identity or delivery state of
+    /// downloads already tracked by Needle. Paths are the stable key because an
+    /// imported file has no source URL or download job to identify it by.
+    @discardableResult
+    func mergeLibraryTracks(_ imported: [TrackRequest]) -> Int {
+        var changed = false
+        var added = 0
+        var mergedTracks = tracks
+        for discovered in imported {
+            guard let path = discovered.savedPath, !path.isEmpty else { continue }
+            let canonical = Self.canonicalPath(path)
+            if let index = mergedTracks.firstIndex(where: { track in
+                guard let existingPath = track.savedPath else { return false }
+                return Self.canonicalPath(existingPath) == canonical
+            }) {
+                var existing = mergedTracks[index]
+                let isInFlight = [.searching, .saving, .metadata, .download, .convert, .tag].contains(existing.stage)
+                if !isInFlight {
+                    if !discovered.artist.isEmpty { existing.artist = discovered.artist }
+                    if !discovered.title.isEmpty { existing.title = discovered.title }
+                    existing.album = discovered.album
+                    if existing.sourceURL.isEmpty, !discovered.sourceURL.isEmpty { existing.sourceURL = discovered.sourceURL }
+                    if existing.settingsSnapshot == nil { existing.settingsSnapshot = discovered.settingsSnapshot }
+                    if existing.date < discovered.date { existing.date = discovered.date }
+                    if existing.discoveredFromFolder != true { existing.discoveredFromFolder = false }
+                    if existing != mergedTracks[index] { mergedTracks[index] = existing; changed = true }
+                }
+            } else {
+                mergedTracks.append(discovered)
+                changed = true
+                added += 1
+            }
+        }
+        if changed { tracks = mergedTracks }
+        return added
+    }
+
+    private static func canonicalPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
     private func save() {
         if let data = try? JSONEncoder().encode(tracks) { defaults.set(data, forKey: key) }
     }

@@ -2,6 +2,11 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.5.0
+
+- Library discovers recordings already in your Needle folder, including CLI downloads, and reads their embedded tags and artwork.
+- Refresh the folder inventory without downloading again or duplicating existing entries.
+
 ## 0.4.1
 
 - Drag source links onto any tab to find candidates automatically in Review Queue. Check the detected details, preview, and approve each recording before downloading.

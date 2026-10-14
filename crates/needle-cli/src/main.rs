@@ -6,6 +6,8 @@ use std::time::Duration;
 use std::path::PathBuf;
 use strsim::jaro_winkler;
 
+mod library_scan;
+
 #[derive(Parser)]
 #[command(name = "needle")]
 #[command(about = "Strict recording resolver — get the exact song you asked for")]
@@ -126,6 +128,12 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Inventory existing audio files without changing them
+    LibraryScan {
+        root: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -151,7 +159,24 @@ async fn main() -> Result<()> {
         }
         Commands::RepairSuggestions { path, json } => cmd_repair_suggestions(path, json).await,
         Commands::IdentifyUrl { url, json } => cmd_identify_url(url, json),
+        Commands::LibraryScan { root, json } => cmd_library_scan(root, json),
     }
+}
+
+fn cmd_library_scan(root: PathBuf, json: bool) -> Result<()> {
+    let response = library_scan::run(&root)?;
+    if json {
+        println!("{}", serde_json::to_string(&response)?);
+    } else {
+        println!("Found {} audio files in {}", response.tracks.len(), root.display());
+        for track in &response.tracks {
+            println!("{} — {}", track.artist.as_deref().unwrap_or("Unknown artist"), track.title.as_deref().unwrap_or("Unknown title"));
+        }
+        for warning in &response.warnings {
+            eprintln!("Warning: {warning}");
+        }
+    }
+    Ok(())
 }
 
 fn cmd_inspect(path: PathBuf, artwork_dir: Option<PathBuf>, json: bool) -> Result<()> {

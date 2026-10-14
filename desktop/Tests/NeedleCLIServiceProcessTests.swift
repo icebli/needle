@@ -49,6 +49,32 @@ printf '%s\n' '{"ok":true,"request":{"artist":"A","title":"T"},"metadata":null,"
         XCTAssertTrue(response.ok)
     }
 
+    @MainActor
+    func testLibraryScanPassesRootAndMergesStructuredMetadata() async throws {
+        let fixture = try CLIFixture(script: #"""
+#!/bin/bash
+set -eu
+printf '%s\n' "$@" > "$NEEDLE_TEST_ARGS"
+printf '%s\n' '{"ok":true,"tracks":[{"path":"/tmp/Artist/Song.aif","artist":"Artist","title":"Song","album":"Album","sourceUrl":"https://example.com/song","modifiedMs":1700000000000}],"warnings":[]}'
+"""#)
+        var settings = NeedleSettings(); settings.cliPath = fixture.path
+        let suite = "needle-library-scan-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let history = HistoryStore(defaults: defaults)
+        let result = await LibraryScanService().scan(root: URL(fileURLWithPath: "/tmp/needle-library"), settings: settings, history: history)
+        guard case .success(let summary) = result else { return XCTFail("library scan failed: \(result)") }
+        XCTAssertEqual(summary.imported, 1)
+        XCTAssertEqual(try fixture.arguments(), ["library-scan", "/tmp/needle-library", "--json"])
+        XCTAssertEqual(history.tracks.first?.sourceURL, "https://example.com/song")
+        XCTAssertEqual(history.tracks.first?.date, Date(timeIntervalSince1970: 1700000000))
+        XCTAssertEqual(history.tracks.first?.settingsSnapshot?.format, "aif")
+        let repeated = await LibraryScanService().scan(root: URL(fileURLWithPath: "/tmp/needle-library"), settings: settings, history: history)
+        guard case .success(let repeatedSummary) = repeated else { return XCTFail("repeat library scan failed: \(repeated)") }
+        XCTAssertEqual(repeatedSummary.imported, 0)
+        XCTAssertEqual(history.tracks.count, 1)
+    }
+
     func testGetReportsSplitProgressAndUsesAuthoritativeSavedFields() async throws {
         let fixture = try CLIFixture(script: #"""
 #!/bin/bash

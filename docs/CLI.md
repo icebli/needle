@@ -95,3 +95,11 @@ needle repair "/path/to/recording.mp3" --clear-album --artwork "/path/to/cover.j
 ```
 
 Repair changes embedded tags and artwork without downloading or converting audio. A sibling backup preserves the original file; its path is returned in the JSON response. Existing provenance and unrelated tags are preserved. `--artwork-url` accepts an HTTP(S) image; images are validated and limited to 10 MiB. Suggestions do not apply changes automatically, and variant warnings help avoid replacing a remix's metadata with the original recording's.
+
+## Inventory an existing library
+
+```bash
+needle library-scan ~/Music/needle --json
+```
+
+Recursively lists supported audio files and their embedded tags without modifying them. Hidden files, repair backups, temporary files, and symbolic links are skipped. Unreadable tags produce warnings while the file remains visible for review.

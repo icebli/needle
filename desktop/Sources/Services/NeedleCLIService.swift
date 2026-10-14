@@ -81,6 +81,37 @@ actor NeedleCLIService {
         } catch { return .failure(error) }
     }
 
+    struct LibraryScanTrack: Codable, Equatable {
+        let path: String
+        let artist: String?
+        let title: String?
+        let album: String?
+        let sourceURL: String?
+        let modifiedMs: UInt64?
+
+        enum CodingKeys: String, CodingKey {
+            case path, artist, title, album
+            case sourceURL = "sourceUrl"
+            case modifiedMs
+        }
+    }
+
+    struct LibraryScanResponse: Codable {
+        let ok: Bool
+        let tracks: [LibraryScanTrack]
+        let warnings: [String]
+        let error: String?
+    }
+
+    func scanLibrary(root: String, settings: NeedleSettings) async -> Result<LibraryScanResponse, Error> {
+        do {
+            let data = try await execute(["library-scan", root, "--json"], settings: settings).output
+            let response = try Self.parseLastJSON(LibraryScanResponse.self, data: data)
+            guard response.ok else { throw CLIError.message(response.error ?? "Needle could not scan this folder.") }
+            return .success(response)
+        } catch { return .failure(error) }
+    }
+
     func runJSONCommand(_ arguments: [String], settings: NeedleSettings) async throws -> Data {
         try await execute(arguments, settings: settings).output
     }

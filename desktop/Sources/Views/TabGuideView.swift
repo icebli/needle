@@ -83,7 +83,7 @@ struct TabGuideView: View {
     ] }
 
     private var librarySections: [GuideSection] { [
-        GuideSection("Browse your collection", "Library shows recordings saved by Needle on this computer. Use the filter to find an artist, song, or album, and Open folder to view the underlying files in Finder."),
+        GuideSection("Browse your collection", "Library scans your Needle music folder when you open this tab, including recordings saved through the CLI or before the desktop app. Choose Refresh after adding files outside Needle. Use the filter to find an artist, song, or album, and Open folder to view the underlying files in Finder. Scanning reads embedded tags and artwork without changing your audio files; backup and temporary files are skipped."),
         GuideSection("Repair a recording", "Choose Repair on a track to inspect the tags currently embedded in the file. You can change artist, title, and album. Use Remove album when an incorrect or unknown album should be cleared explicitly."),
         GuideSection("Fix artwork", "Choose a local image file or find artwork from the approved source, then preview it before applying. Needle embeds the image in the existing audio file and refreshes the Library thumbnail after the repair."),
         GuideSection("Use metadata suggestions carefully", "Find metadata suggestions uses authoritative lookup data to propose artist, title, and album values. Preview the changes first and choose Use metadata before applying. Variant warnings call out remix, edit, live, or similar words that you should preserve."),

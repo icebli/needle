@@ -24,7 +24,7 @@ The Mac installer includes its audio tools. You do not need Rust, Xcode, Homebre
 4. Use **Preview** to listen inside Needle and scrub through the recording. Previewing does not save the track to your collection.
 5. If you have not installed the optional Needle Spotify companion, turn off **Add to Needle in Spotify after saving** (the name changes with your chosen playlist) and choose **Save recording**. This checkbox starts enabled; turning it off avoids waiting for a companion you have not installed. If you use automatic playlist delivery, check the playlist name before saving.
 
-**Activity** shows download progress and Spotify delivery separately. **Library** contains your saved recordings and can reveal them in Finder. The default music folder is `~/Music/needle` — the `needle` folder inside your home folder's **Music** folder.
+**Activity** shows download progress and Spotify delivery separately. **Library** scans your Needle folder for existing recordings, including CLI downloads, and can reveal them in Finder. Choose **Refresh** after adding files outside Needle. Scanning reads embedded tags without changing your files; backups and temporary files are skipped. The default music folder is `~/Music/needle` — the `needle` folder inside your home folder's **Music** folder.
 
 A high bitrate does not prove a recording is the right version. Needle shows identity warnings, and converting audio cannot restore quality missing from the source.
 
