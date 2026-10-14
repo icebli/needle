@@ -36,6 +36,13 @@ struct LibraryView: View {
                 Spacer()
                 if model.isScanningLibrary { ProgressView().controlSize(.small) }
                 Button("Refresh") { model.scanLibrary() }.disabled(model.isScanningLibrary)
+                Button {
+                    model.enqueueAllLibraryTracksToSpotify()
+                } label: {
+                    Label("Add all to Spotify", systemImage: "arrow.down.circle.fill")
+                }
+                .disabled(model.isScanningLibrary || tracks.isEmpty)
+                .help("Queue every saved MP3 that is not already delivered or waiting")
                 Button("Open folder") {
                     do {
                         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

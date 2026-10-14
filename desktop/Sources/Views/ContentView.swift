@@ -16,6 +16,7 @@ struct ContentView: View {
                 switch model.destination {
                 case .addMusic: AddMusicView(model: model)
                 case .reviewQueue: ReviewQueueView(model: model)
+                case .discover: DiscoveryView(model: model)
                 case .activity: ActivityView(model: model)
                 case .library: LibraryView(model: model)
                 }

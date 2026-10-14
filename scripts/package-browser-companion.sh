@@ -34,6 +34,7 @@ cp -R "$REPO_DIR/browser-extension/icons" "$FIREFOX_STAGE/icons"
 )
 cp "$PACKAGE_DIR/../needle-firefox.xpi" "$PACKAGE_DIR/needle-firefox.xpi"
 cp "$REPO_DIR/spicetify/needle-local-playlist.js" "$PACKAGE_DIR/spicetify/needle-local-playlist.js"
+cp "$REPO_DIR/spicetify/needle-discovery.js" "$PACKAGE_DIR/spicetify/needle-discovery.js"
 cp "$REPO_DIR/browser-extension/Install Needle Companion.command" "$PACKAGE_DIR/Install Needle Companion.command"
 chmod 0755 "$PACKAGE_DIR/Install Needle Companion.command"
 

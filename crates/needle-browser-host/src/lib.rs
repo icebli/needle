@@ -1,3 +1,5 @@
+pub mod discovery;
+
 use anyhow::{anyhow, bail, Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -139,6 +141,8 @@ pub struct DesktopStatusResponse {
     pub status: String,
     pub playlist_uri: Option<String>,
     pub added_uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +152,14 @@ struct AcknowledgementReceipt {
     playlist_uri: Option<String>,
     added_uri: Option<String>,
     acknowledged_at_unix: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProgressReceipt {
+    job_id: String,
+    detail: String,
+    updated_at_unix: u64,
 }
 
 pub fn run_native_host() -> Result<()> {
@@ -216,7 +228,7 @@ fn enqueue_desktop_job(body: &str) -> Result<DesktopEnqueueResponse> {
 
 fn status_desktop_job(job_id: &str) -> Result<DesktopStatusResponse> {
     let job_id = validate_job_id(job_id)?;
-    status_for_job(&queue_path()?, &receipt_dir()?, &job_id)
+    status_for_job_with_progress(&queue_path()?, &receipt_dir()?, &progress_dir()?, &job_id)
 }
 
 fn resume_desktop_job(job_id: &str) -> Result<DesktopStatusResponse> {
@@ -227,7 +239,17 @@ fn resume_desktop_job(job_id: &str) -> Result<DesktopStatusResponse> {
     Ok(status)
 }
 
+#[cfg(test)]
 fn status_for_job(queue: &Path, receipts: &Path, job_id: &str) -> Result<DesktopStatusResponse> {
+    status_for_job_with_progress(queue, receipts, Path::new(""), job_id)
+}
+
+fn status_for_job_with_progress(
+    queue: &Path,
+    receipts: &Path,
+    progress: &Path,
+    job_id: &str,
+) -> Result<DesktopStatusResponse> {
     if let Some(receipt) = load_receipt(receipts, job_id)? {
         if complete_receipt(&receipt) {
             return Ok(DesktopStatusResponse {
@@ -235,15 +257,22 @@ fn status_for_job(queue: &Path, receipts: &Path, job_id: &str) -> Result<Desktop
                 status: "added".into(),
                 playlist_uri: receipt.playlist_uri,
                 added_uri: receipt.added_uri,
+                detail: None,
             });
         }
     }
     let pending = load_queue(queue)?.iter().any(|job| job.id == job_id);
+    let detail = if pending && !progress.as_os_str().is_empty() {
+        load_progress(progress, job_id)?.map(|receipt| receipt.detail)
+    } else {
+        None
+    };
     Ok(DesktopStatusResponse {
         ok: true,
         status: if pending { "pending" } else { "unknown" }.into(),
         playlist_uri: None,
         added_uri: None,
+        detail,
     })
 }
 
@@ -524,6 +553,10 @@ fn receipt_dir() -> Result<PathBuf> {
     Ok(config_dir()?.join("browser-receipts"))
 }
 
+fn progress_dir() -> Result<PathBuf> {
+    Ok(config_dir()?.join("browser-progress"))
+}
+
 fn receipt_path(receipts: &Path, job_id: &str) -> Result<PathBuf> {
     validate_job_id(job_id)?;
     Ok(receipts.join(format!("{job_id}.json")))
@@ -621,6 +654,46 @@ fn load_receipt(receipts: &Path, job_id: &str) -> Result<Option<AcknowledgementR
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
+}
+
+fn progress_path(progress: &Path, job_id: &str) -> Result<PathBuf> {
+    validate_job_id(job_id)?;
+    Ok(progress.join(format!("{job_id}.json")))
+}
+
+fn save_progress(progress: &Path, receipt: &ProgressReceipt) -> Result<()> {
+    let job_id = validate_job_id(&receipt.job_id)?;
+    fs::create_dir_all(progress)?;
+    let temporary = progress.join(format!(".{job_id}-{}.tmp", std::process::id()));
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    file.write_all(&serde_json::to_vec_pretty(receipt)?)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&temporary, progress_path(progress, &job_id)?)?;
+    Ok(())
+}
+
+fn load_progress(progress: &Path, job_id: &str) -> Result<Option<ProgressReceipt>> {
+    let path = progress_path(progress, job_id)?;
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).context("invalid playlist progress receipt")?)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn record_progress(queue: &Path, progress: &Path, receipt: ProgressReceipt) -> Result<bool> {
+    with_queue_lock(queue, || {
+        if !load_queue(queue)?.iter().any(|job| job.id == receipt.job_id) {
+            return Ok(false);
+        }
+        save_progress(progress, &receipt)?;
+        Ok(true)
+    })
 }
 
 fn log_path() -> Result<PathBuf> {
@@ -853,6 +926,45 @@ fn handle_http_request(mut request: Request) -> Result<()> {
                         origin.as_deref(),
                     ))?;
                 }
+            }
+        }
+        (&Method::Post, "/progress") => {
+            let mut body = String::new();
+            request
+                .as_reader()
+                .take(64 * 1024)
+                .read_to_string(&mut body)?;
+            let value: serde_json::Value = serde_json::from_str(&body)?;
+            let id = value
+                .get("jobId")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow!("jobId is required"))?;
+            let id = validate_job_id(id)?;
+            let detail = value
+                .get("detail")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| anyhow!("detail is required"))?
+                .to_owned();
+            let detail = validate_text("progress detail", detail)?;
+            let recorded = record_progress(
+                &queue_path()?,
+                &progress_dir()?,
+                ProgressReceipt {
+                    job_id: id,
+                    detail,
+                    updated_at_unix: unix_timestamp(),
+                },
+            )?;
+            if recorded {
+                request.respond(cors_response(
+                    Response::from_string("{}").with_header(json_header()),
+                    origin.as_deref(),
+                ))?;
+            } else {
+                request.respond(cors_response(
+                    Response::from_string("unknown job ID").with_status_code(StatusCode(404)),
+                    origin.as_deref(),
+                ))?;
             }
         }
         (&Method::Post, "/log") => {
@@ -1105,6 +1217,54 @@ mod tests {
         )
         .unwrap();
         assert_eq!(status_for_job(&queue, &receipts, "job-pending").unwrap().status, "pending");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn desktop_status_includes_durable_pending_detail() {
+        let (root, queue, receipts) = fixture_paths();
+        let progress = root.join("progress");
+        save_queue(
+            &queue,
+            &[QueueJob {
+                id: "job-detail".into(),
+                playlist_name: "Needle".into(),
+                tracks: vec![],
+                created_at_unix: 1,
+            }],
+        )
+        .unwrap();
+        assert!(record_progress(
+            &queue,
+            &progress,
+            ProgressReceipt {
+                job_id: "job-detail".into(),
+                detail: "Open Spotify Local Files and choose the recording".into(),
+                updated_at_unix: 2,
+            },
+        )
+        .unwrap());
+        let status = status_for_job_with_progress(&queue, &receipts, &progress, "job-detail").unwrap();
+        assert_eq!(status.status, "pending");
+        assert_eq!(status.detail.as_deref(), Some("Open Spotify Local Files and choose the recording"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn progress_cannot_mint_detail_for_unknown_job() {
+        let (root, queue, _receipts) = fixture_paths();
+        let progress = root.join("progress");
+        assert!(!record_progress(
+            &queue,
+            &progress,
+            ProgressReceipt {
+                job_id: "job-unknown".into(),
+                detail: "untrusted".into(),
+                updated_at_unix: 2,
+            },
+        )
+        .unwrap());
+        assert!(!progress.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

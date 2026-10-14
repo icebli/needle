@@ -57,3 +57,9 @@ For help, include the app version and exact error message. Keep passwords and ac
 ## In-app guides
 
 Choose the **?** button in any tab to open its guide. Guides explain the controls, common problems, and next steps without leaving Needle.
+
+## Discover
+
+Sync your top 20 Spotify artists, choose up to five, and find source uploads ranked by reported plays/views. Needle checks exact artist/title matches in Spotify, skips existing Library files, and keeps failed catalog checks distinct from no match. **Preview & review** opens the exact source in Review Queue; downloads still require approval. The (?) button explains limits and version checks. Spotify and the bundled Spicetify companion must be running. Use setup’s **Enable / update Needle companion** after installing Spicetify; enabling it restarts Spotify.
+
+In Library, **Add all to Spotify** queues eligible saved MP3s and skips delivered, pending, missing, and other-format entries. Specific Spotify delivery errors appear directly on each pending row.

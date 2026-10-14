@@ -30,7 +30,7 @@ BIN_DIR="$(swift build --package-path "$REPO_DIR/desktop" -c "$CONFIGURATION" --
 SPARKLE_SOURCE="$REPO_DIR/desktop/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 [[ -d "$SPARKLE_SOURCE" ]] || { echo "SwiftPM did not resolve Sparkle.framework." >&2; exit 1; }
 rm -rf "$APP_DIR"
-mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources/bin" "$APP_DIR/Contents/Frameworks"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources/bin" "$APP_DIR/Contents/Resources/spicetify" "$APP_DIR/Contents/Frameworks"
 ditto "$SPARKLE_SOURCE" "$APP_DIR/Contents/Frameworks/Sparkle.framework"
 install -m 0644 "$REPO_DIR/desktop/.build/artifacts/sparkle/Sparkle/LICENSE" "$APP_DIR/Contents/Resources/SPARKLE_LICENSE"
 if [[ ! -f "$ICON_SOURCE" ]]; then
@@ -44,6 +44,8 @@ if ! otool -l "$APP_DIR/Contents/MacOS/NeedleDesktop" | grep -Fq '@executable_pa
 fi
 install -m 0755 "$REPO_DIR/target/release/needle" "$APP_DIR/Contents/Resources/bin/needle"
 install -m 0755 "$REPO_DIR/target/release/needle-browser-host" "$APP_DIR/Contents/Resources/bin/needle-browser-host"
+install -m 0644 "$REPO_DIR/spicetify/needle-local-playlist.js" "$APP_DIR/Contents/Resources/spicetify/needle-local-playlist.js"
+install -m 0644 "$REPO_DIR/spicetify/needle-discovery.js" "$APP_DIR/Contents/Resources/spicetify/needle-discovery.js"
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

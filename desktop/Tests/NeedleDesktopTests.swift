@@ -199,7 +199,7 @@ final class NeedleDesktopTests: XCTestCase {
         settings.format = "mp3"
         let track = TrackRequest(artist: "Artist", title: "Title", sourceURL: "https://example.com/track", savedPath: "/tmp/track.mp3", stage: .saved, settingsSnapshot: settings, discoveredFromFolder: true)
 
-        model.enqueue(track)
+        model.enqueue(track) { _, _ in .failure(CLIError.message("Test handoff")) }
 
         XCTAssertEqual(model.history.tracks.first?.discoveredFromFolder, false)
         XCTAssertEqual(model.history.tracks.first?.spotifyStatus, .pending)

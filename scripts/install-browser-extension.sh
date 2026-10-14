@@ -58,6 +58,7 @@ PY
 if [[ "$SKIP_SPOTIFY" == false ]]; then
   mkdir -p "$SPICETIFY_DIR"
   install -m 0644 "$REPO_DIR/spicetify/needle-local-playlist.js" "$SPICETIFY_DIR/needle-local-playlist.js"
+  install -m 0644 "$REPO_DIR/spicetify/needle-discovery.js" "$SPICETIFY_DIR/needle-discovery.js"
 fi
 
 SPICETIFY_BIN="$(command -v spicetify || true)"
@@ -67,7 +68,15 @@ fi
 if [[ "$SKIP_SPOTIFY" == true ]]; then
   echo "Spotify configuration left unchanged (--skip-spotify)"
 elif [[ -n "$SPICETIFY_BIN" ]]; then
-  "$SPICETIFY_BIN" config extensions needle-local-playlist.js
+  CURRENT_EXTENSIONS="$($SPICETIFY_BIN config extensions 2>/dev/null | tr '\n' '|')"
+  CURRENT_EXTENSIONS="${CURRENT_EXTENSIONS%|}"
+  for extension in needle-local-playlist.js needle-discovery.js; do
+    case "|$CURRENT_EXTENSIONS|" in
+      *"|$extension|"*) ;;
+      *) CURRENT_EXTENSIONS="${CURRENT_EXTENSIONS:+$CURRENT_EXTENSIONS|}$extension" ;;
+    esac
+  done
+  "$SPICETIFY_BIN" config extensions "$CURRENT_EXTENSIONS"
   if ! "$SPICETIFY_BIN" apply; then
     echo "Spotify changed since the last Spicetify backup; refreshing the backup before applying extensions" >&2
     "$SPICETIFY_BIN" backup apply
@@ -123,6 +132,7 @@ echo "Chrome package: $TARGET_DIR/needle-chrome.zip"
 echo "Self-contained companion package: $TARGET_DIR/needle-companion.zip"
 if [[ "$SKIP_SPOTIFY" == false ]]; then
   echo "Spicetify companion: $SPICETIFY_DIR/needle-local-playlist.js"
+  echo "Spicetify discovery companion: $SPICETIFY_DIR/needle-discovery.js"
 fi
 echo "Load browser-extension/manifest.json temporarily from about:debugging, or install a signed build of the XPI."
 echo "Load target/browser-extension/needle-chrome/ as an unpacked extension at chrome://extensions."

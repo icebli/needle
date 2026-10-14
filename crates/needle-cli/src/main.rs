@@ -6,6 +6,7 @@ use std::time::Duration;
 use std::path::PathBuf;
 use strsim::jaro_winkler;
 
+mod discovery;
 mod library_scan;
 
 #[derive(Parser)]
@@ -134,6 +135,17 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Find popular and unreleased recordings for an artist
+    Discover {
+        /// Artist name
+        artist: String,
+        /// Search source: auto, youtube, or soundcloud
+        #[arg(long, default_value = "auto")]
+        source: String,
+        /// Emit one structured JSON response
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -160,7 +172,38 @@ async fn main() -> Result<()> {
         Commands::RepairSuggestions { path, json } => cmd_repair_suggestions(path, json).await,
         Commands::IdentifyUrl { url, json } => cmd_identify_url(url, json),
         Commands::LibraryScan { root, json } => cmd_library_scan(root, json),
+        Commands::Discover { artist, source, json } => cmd_discover(&artist, &source, json),
     }
+}
+
+fn cmd_discover(artist: &str, source: &str, json: bool) -> Result<()> {
+    let source = parse_source(source)?;
+    let response = discovery::run(artist, source)?;
+    if json {
+        println!("{}", serde_json::to_string(&response)?);
+    } else {
+        println!(
+            "Found {} candidate recordings for {artist}",
+            response.candidates.len()
+        );
+        for candidate in &response.candidates {
+            let views = candidate
+                .view_count
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "unknown views".into());
+            println!(
+                "{} — {} · {} views · {}",
+                candidate.uploader.as_deref().unwrap_or("Unknown uploader"),
+                candidate.title,
+                views,
+                candidate.url
+            );
+        }
+        for warning in &response.warnings {
+            eprintln!("Warning: {warning}");
+        }
+    }
+    Ok(())
 }
 
 fn cmd_library_scan(root: PathBuf, json: bool) -> Result<()> {
@@ -1432,6 +1475,8 @@ mod tests {
 
         let cli = Cli::try_parse_from(["needle", "doctor", "--json"]).unwrap();
         assert!(matches!(cli.command, Commands::Doctor { json: true }));
+        let cli = Cli::try_parse_from(["needle", "discover", "Artist", "--json"]).unwrap();
+        assert!(matches!(cli.command, Commands::Discover { json: true, .. }));
     }
 
     #[test]

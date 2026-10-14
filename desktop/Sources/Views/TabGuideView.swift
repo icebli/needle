@@ -44,6 +44,7 @@ struct TabGuideView: View {
         switch destination {
         case .addMusic: "Find the right recording, listen before saving, then choose what to keep."
         case .reviewQueue: "Review a whole list at your pace while approved downloads run in the background."
+        case .discover: "Find popular source recordings for your top Spotify artists, then preview and approve."
         case .activity: "See what Needle saved locally and what Spotify has confirmed."
         case .library: "Inspect and repair recording details and artwork without downloading again."
         }
@@ -53,10 +54,19 @@ struct TabGuideView: View {
         switch destination {
         case .addMusic: addMusicSections
         case .reviewQueue: reviewQueueSections
+        case .discover: discoverySections
         case .activity: activitySections
         case .library: librarySections
         }
     }
+
+    private var discoverySections: [GuideSection] { [
+        GuideSection("Connect the companion", "Open Spotify and enable Needle’s Spicetify companion using setup. Sync top artists reads your top 20 artists over approximately six months. Authentication stays inside Spotify; Needle receives artist and catalog metadata only.", linkTitle: "Get Spicetify", linkURL: "https://spicetify.app/"),
+        GuideSection("Choose artists", "Select up to five artists and choose Find recordings. Needle searches its configured sources, sorts the returned uploads by reported plays/views, and skips recordings already saved in your Library. These are popular uploads among the search results, not a complete ranking of every song."),
+        GuideSection("Understand catalog checks", "An exact artist/title match is shown as Found on Spotify and hidden by default. No matching Spotify recording found means this search did not return an exact match; alternate names, regional availability, and version details can affect the result. Couldn’t check Spotify means the lookup failed, never that the song is absent."),
+        GuideSection("Preview and approve", "Choose Preview & review to place the exact source in Review Queue. Listen, scrub past an intro, and check the editable artist/title hints before choosing Approve & download. Discovery never approves or downloads a recording automatically."),
+        GuideSection("Return later", "Synced artists and discovery results are saved locally. Stop ends a discovery search; completed results stay available. Sync again when you want to refresh your favorite artists."),
+    ] }
 
     private var addMusicSections: [GuideSection] { [
         GuideSection("Find a recording", "Type the artist and song title, then choose Find recordings. You can add an album hint or paste a specific source link when you have one. Needle searches for possible uploads and explains why each one ranked where it did."),

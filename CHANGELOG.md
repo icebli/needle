@@ -2,6 +2,13 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.6.0
+
+- Discover popular uploads from your top Spotify artists, check for exact catalog matches, and send interesting recordings to Review Queue for preview and approval.
+- Add all eligible Library recordings to your chosen Spotify playlist, with duplicates and pending deliveries skipped.
+- More reliable Spotify delivery: recover from local-file indexing errors, distinguish matching album metadata, and show specific waiting reasons.
+- Enable or update Needle’s bundled Spicetify companion from the setup guide.
+
 ## 0.5.0
 
 - Library discovers recordings already in your Needle folder, including CLI downloads, and reads their embedded tags and artwork.

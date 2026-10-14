@@ -38,6 +38,17 @@ The queue survives restarting Needle. Interrupted work needs your review before 
 
 Preview controls include a full-track scrubber, ten-second jumps, and **Skip intro**. Enable **Keep position when switching sources** to compare recordings at the same timestamp. Preparing a preview can take time because Needle fetches the full audio into a temporary cache.
 
+## Discover recordings from your top artists
+
+Open **Discover** and use its Spotify setup guide to enable or update Needle’s bundled companion. [Spicetify](https://spicetify.app/) must already be installed; enabling the companion restarts Spotify and preserves your other extensions.
+
+1. Open Spotify and choose **Sync top artists**. Needle reads your top 20 artists over approximately six months and saves the artist list locally.
+2. Select up to five artists and choose **Find recordings**. Needle searches your configured sources and ranks the returned uploads by reported plays/views, skipping recordings already saved in Library.
+3. Check each catalog status. **No matching Spotify recording found** means no exact artist/title match appeared in this search; regional availability and alternate titles can affect results. **Couldn’t check Spotify** means the lookup failed, not that the song is absent. Exact matches are hidden unless you enable **Show recordings found on Spotify**.
+4. Choose **Preview & review**, listen in Review Queue, check artist/title hints and version details, then approve the exact source for download.
+
+Searches share a budget of up to 45 source candidates across the selected artists. Choose one artist for a deeper search. This is a bounded discovery list, not a complete ranking of every recording. **Stop** keeps completed results. If Spotify rate-limits a request, Needle reports the failure and stops catalog checks instead of treating it as an empty catalog. Spotify and Spicetify updates may require updating the companion.
+
 ## Repair a saved recording
 
 In **Library**, choose **Repair**. Needle reads the file's actual tags and embedded artwork. Edit artist, title, or album; use **Remove album** to clear it explicitly. You can choose an image, find artwork from the original source, or request metadata suggestions. Preview suggestions before applying them, especially for remixes and live recordings.
@@ -57,12 +68,14 @@ This local-file workflow does not require Spicetify. Leave **“Add to [playlist
 
 ### Optional automatic playlist delivery
 
+In **Library**, **Add all to Spotify** queues existing MP3s that are not already delivered or waiting. It skips missing files and other formats; Activity tracks each delivery separately.
+
 Automatic delivery additionally requires [Spicetify](https://spicetify.app/) **and the Needle companion installed and active in Spotify**. Spicetify is a Spotify customization tool that lets local extensions run inside the Spotify desktop app. Having Spicetify alone is not enough.
 
 Set it up once:
 
 1. Install [Spicetify using its official installation guide](https://spicetify.app/docs/advanced-usage/installation/). Follow the instructions for your Mac and restart Spotify when prompted.
-2. Install the [Needle companion bundle](browser-extension.md). Its installer registers the browser bridge using the Needle app already in **Applications**. To enable playlist sync, rerun that installer with `--setup-spicetify` after Spicetify is installed.
+2. In Needle’s Spotify setup guide (available in **Add Music** and **Discover**), click **Enable / update Needle companion**. This installs the bundled Spotify extensions and restarts Spotify. The separate [browser companion](browser-extension.md) is only needed to send links from your browser.
 3. Keep Spotify open, enable Spotify Local Files, and confirm that `~/Music/needle` is one of its local-file sources.
 4. In Needle's **Settings**, choose the default playlist name. The initial default is **Needle**. Run a new search after changing it so the destination is captured with the search.
 
@@ -73,6 +86,8 @@ Saving with delivery enabled queues the recording for the named playlist. Automa
 **Saved** means the file is on your Mac. **Waiting for Spotify** means playlist delivery has not been acknowledged yet. Spotify may need several minutes to index a new local file. Keep Spotify open, check its Local Files settings, and use **Check Spotify** in Activity when available. Do not download the recording again merely because delivery is waiting.
 
 After delivery, Activity shows the destination playlist and an **Open playlist** action. That status confirms playlist insertion; use Spotify to confirm playback.
+
+If delivery needs attention, Needle shows the companion’s specific reason. If Spotify exposes multiple indistinguishable local files, Needle does not guess which recording to add; check the duplicate entries in Spotify Local Files. Your saved audio remains intact.
 
 ## Update Needle
 

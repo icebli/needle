@@ -14,6 +14,7 @@ final class AppModel {
     var isSaving: Bool { !saveServices.isEmpty }
     private var saveServices: [UUID: NeedleCLIService] = [:]
     var reviewQueue: ReviewQueue
+    var discovery: DiscoveryStore
     var isCancelling = false
     var isCheckingTools = false
     var tools: DoctorResponse?
@@ -35,6 +36,7 @@ final class AppModel {
         let savedHistory = HistoryStore(defaults: defaults)
         history = savedHistory
         reviewQueue = ReviewQueue(defaults: defaults, history: savedHistory)
+        discovery = DiscoveryStore(defaults: defaults)
         reviewQueue.onSaved = { [weak self] track, spotify in if spotify { self?.enqueue(track) } }
         recoverSpotifyJobs()
     }
@@ -200,7 +202,7 @@ final class AppModel {
         }
     }
 
-    func enqueue(_ track: TrackRequest) {
+    func enqueue(_ track: TrackRequest, handoff: ((TrackRequest, String) async -> Result<String, Error>)? = nil) {
         guard track.savedPath != nil, track.spotifyStatus != .added, !pollingJobIDs.contains(track.id) else { return }
         if track.spotifyJobID != nil {
             Task { await poll(track, resume: true) }
@@ -223,7 +225,10 @@ final class AppModel {
         pollingJobIDs.insert(track.id)
         let playlist = track.settingsSnapshot?.playlistName ?? settings.value.playlistName
         Task {
-            switch await spotify.enqueue(track: pending, playlistName: playlist) {
+            let result: Result<String, Error>
+            if let handoff { result = await handoff(pending, playlist) }
+            else { result = await spotify.enqueue(track: pending, playlistName: playlist) }
+            switch result {
             case .success(let id):
                 pending.spotifyJobID = id
                 history.upsert(pending)
@@ -262,7 +267,7 @@ final class AppModel {
                 }
                 if status.status == "pending" {
                     let playlist = track.spotifyPlaylistName ?? track.settingsSnapshot?.playlistName ?? "Needle"
-                    track.errorDetail = "Local-file indexing or companion startup can take a few minutes. Needle will keep checking the \"\(playlist)\" playlist."
+                    track.errorDetail = status.detail ?? "Local-file indexing or companion startup can take a few minutes. Needle will keep checking the \"\(playlist)\" playlist."
                     history.upsert(track)
                 }
                 if status.status == "unknown" {
@@ -279,7 +284,9 @@ final class AppModel {
         }
         track.spotifyStatus = .pending
         track.stage = .spotifyPending
-        track.errorDetail = "Open Spotify and check Local Files. Use Check Spotify to resume this same delivery job."
+        if track.errorDetail == nil || track.errorDetail?.contains("Local-file indexing or companion startup") == true {
+            track.errorDetail = "Open Spotify and check Local Files. Use Check Spotify to resume this same delivery job."
+        }
         history.upsert(track)
     }
 

@@ -8,7 +8,7 @@ Needle helps you find the exact recording you want, review the available sources
 
 ## Download the Mac app
 
-Download **[Needle 0.4.1](https://github.com/icebli/needle/releases/tag/v0.5.0)** for **Apple Silicon Macs (M1 or newer), macOS 15 Sequoia or later**. Open the `.dmg` and drag Needle to Applications. Follow [Getting started](docs/GETTING_STARTED.md) for your first recording and Spotify setup.
+Download **[Needle 0.6.0](https://github.com/icebli/needle/releases/tag/v0.6.0)** for **Apple Silicon Macs (M1 or newer), macOS 15 Sequoia or later**. Open the `.dmg` and drag Needle to Applications. Follow [Getting started](docs/GETTING_STARTED.md) for your first recording and Spotify setup.
 
 The app is unsigned. On first launch, macOS may require **System Settings → Privacy & Security → Open Anyway**. The installer includes its audio tools; you do not need Rust, Python, Xcode, or Homebrew.
 
@@ -20,7 +20,7 @@ The app is unsigned. On first launch, macOS may require **System Settings → Pr
 4. Save it to `~/Music/needle`. Needle tags the file, writes a provenance sidecar, and keeps the chosen source fixed.
 5. Play it through Spotify Local Files, or optionally let the Needle companion add it to the named Spotify playlist after indexing.
 
-Activity separates local saving from Spotify delivery and shows the confirmed playlist destination. Drop source links onto any tab to find candidates automatically in Review Queue. Review Queue also accepts multiple pasted links or artist/title lines, keeps each approval explicit, and downloads approved recordings in the background. Full-track previews support scrubbing and comparing candidates at the same timestamp. Library lets you repair embedded artwork and tags without downloading again. Advanced Settings and the full CLI remain available for direct URLs, alternate formats, duration overrides, and scripted workflows.
+Activity separates local saving from Spotify delivery and shows the confirmed playlist destination. Drop source links onto any tab to find candidates automatically in Review Queue. Review Queue also accepts multiple pasted links or artist/title lines, keeps each approval explicit, and downloads approved recordings in the background. Full-track previews support scrubbing and comparing candidates at the same timestamp. Library finds existing files, repairs artwork and tags, and can queue all eligible MP3s for Spotify. Discover syncs your top artists, checks popular source uploads against Spotify, and sends recordings to Review Queue for preview and approval. Advanced Settings and the full CLI remain available for direct URLs, alternate formats, duration overrides, and scripted workflows.
 
 ## Start here
 

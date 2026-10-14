@@ -14,6 +14,7 @@
   const playlistCreationPending = new Set();
   const activeJobs = new Set();
   const missingAttempts = new Map();
+  const missingReasons = new Map();
   const pendingAdds = new Map();
   const ADD_CONFIRM_ATTEMPTS = 6;
   const ADD_CONFIRM_DELAY_MS = 500;
@@ -63,38 +64,71 @@
     return trackKey(artistFromLocal(track), track?.name);
   }
 
-  function findLocalTrack(localTracks, requested) {
+  function localTrackMatch(localTracks, requested) {
     const exactKey = trackKey(requested.artist, requested.name);
     const exactMatches = localTracks.filter((track) => localKey(track) === exactKey);
     const titleMatches = localTracks.filter((track) => normalize(track?.name) === normalize(requested.name));
-    const candidates = exactMatches.length > 0 ? exactMatches : titleMatches;
-    if (!candidates.length) return null;
+    const candidates = (exactMatches.length > 0 ? exactMatches : titleMatches)
+      .filter((track, index, tracks) => !track?.uri || tracks.findIndex((candidate) => candidate?.uri === track.uri) === index);
+    if (!candidates.length) return { track: null, reason: "no matching Spotify local track" };
 
     if (requested.savedPath) {
       const pathMatches = candidates.filter((track) => pathFromLocal(track) === requested.savedPath);
-      if (pathMatches.length === 1) return pathMatches[0];
-      if (pathMatches.length > 1) return null;
+      if (pathMatches.length === 1) return { track: pathMatches[0], reason: null };
+      if (pathMatches.length > 1) {
+        return { track: null, reason: `Spotify exposed ${pathMatches.length} local files at the queued path` };
+      }
     }
 
     if (requested.durationMs != null) {
       const durationCandidates = candidates.filter((track) => durationMatches(track, requested.durationMs));
-      if (durationCandidates.length === 1) return durationCandidates[0];
+      if (durationCandidates.length === 1) {
+        const candidate = durationCandidates[0];
+        const candidateAlbum = albumFromLocal(candidate);
+        if (!requested.album || !candidateAlbum || normalize(candidateAlbum) === normalize(requested.album)) {
+          return { track: candidate, reason: null };
+        }
+        return { track: null, reason: "Spotify local album metadata does not match the queued album" };
+      }
+      if (durationCandidates.length > 1 && requested.album) {
+        const exactMetadataMatches = durationCandidates.filter((track) =>
+          artistFromLocal(track) === requested.artist
+          && track?.name === requested.name
+          && albumFromLocal(track) === requested.album,
+        );
+        if (exactMetadataMatches.length === 1) return { track: exactMetadataMatches[0], reason: null };
+        const albumMatches = durationCandidates.filter((track) => normalize(albumFromLocal(track)) === normalize(requested.album));
+        if (albumMatches.length === 1) return { track: albumMatches[0], reason: null };
+      }
       // A queued duration is part of the downloaded file identity. If Spotify
       // cannot expose that duration, do not fall back to a same-tag recording.
-      return null;
+      return {
+        track: null,
+        reason: durationCandidates.length
+          ? `Spotify exposed ${durationCandidates.length} matching local files with the queued duration`
+          : "Spotify has not exposed a local file with the queued duration",
+      };
     }
 
     if (candidates.length > 0 && requested.album) {
       const albumKey = normalize(requested.album);
       const albumMatches = candidates.filter((track) => normalize(albumFromLocal(track)) === albumKey);
-      if (albumMatches.length === 1) return albumMatches[0];
-      if (albumMatches.length > 1) return null;
+      if (albumMatches.length === 1) return { track: albumMatches[0], reason: null };
+      if (albumMatches.length > 1) {
+        return { track: null, reason: `Spotify exposed ${albumMatches.length} matching local files for the queued album` };
+      }
       // Older Spotify builds may omit local album metadata. Only fall back
       // when there is one candidate and no album value that contradicts it.
-      if (candidates.length === 1 && !albumFromLocal(candidates[0])) return candidates[0];
-      return null;
+      if (candidates.length === 1 && !albumFromLocal(candidates[0])) return { track: candidates[0], reason: null };
+      return { track: null, reason: "Spotify local album metadata does not match the queued album" };
     }
-    return candidates.length === 1 ? candidates[0] : null;
+    return candidates.length === 1
+      ? { track: candidates[0], reason: null }
+      : { track: null, reason: `Spotify exposed ${candidates.length} matching local files` };
+  }
+
+  function findLocalTrack(localTracks, requested) {
+    return localTrackMatch(localTracks, requested).track;
   }
 
   function playlistIndex(items) {
@@ -127,11 +161,31 @@
   }
 
   async function markDone(jobId, playlistUri, addedUri) {
-    await fetch(`${QUEUE_SERVER}/done`, {
+    const response = await fetch(`${QUEUE_SERVER}/done`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jobId, playlistUri, addedUri }),
     });
+    if (!response.ok) throw new Error(`Needle could not acknowledge Spotify delivery (${response.status})`);
+  }
+
+  async function reportProgress(jobId, detail) {
+    const response = await fetch(`${QUEUE_SERVER}/progress`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId, detail }),
+    });
+    if (!response.ok) throw new Error(`Needle could not record delivery progress (${response.status})`);
+  }
+
+  async function readLocalTracks(LocalFilesAPI, logger = log) {
+    try {
+      const response = await LocalFilesAPI.getTracks();
+      return response?.items || response || [];
+    } catch (error) {
+      await logger("error", `Spotify Local Files lookup failed: ${error?.message || String(error)}`);
+      return null;
+    }
   }
 
   function findPlaylistInRootlist(rootlist, name) {
@@ -219,12 +273,21 @@
       await markDone(job.id, null, null);
       return;
     }
-    const local = findLocalTrack(localTracks, requested);
+    const match = localTrackMatch(localTracks, requested);
+    const local = match.track;
     if (!local?.uri) {
       const attempts = (missingAttempts.get(job.id) || 0) + 1;
+      const previousReason = missingReasons.get(job.id);
       missingAttempts.set(job.id, attempts);
-      if (attempts === 1 || attempts % 12 === 0) {
-        await log("warn", `Waiting for Spotify to index ${requested.artist} — ${requested.name}`);
+      missingReasons.set(job.id, match.reason);
+      if (attempts === 1 || attempts % 12 === 0 || previousReason !== match.reason) {
+        const detail = `Open Spotify Local Files and choose the recording: ${match.reason}`;
+        await log("warn", `Waiting for Spotify to identify ${requested.artist} — ${requested.name}: ${match.reason}`);
+        try {
+          await reportProgress(job.id, detail);
+        } catch (error) {
+          await log("error", `${job.id}: ${error?.message || String(error)}`);
+        }
       }
       return;
     }
@@ -240,6 +303,7 @@
     }
     await markDone(job.id, playlistUri, local.uri);
     missingAttempts.delete(job.id);
+    missingReasons.delete(job.id);
     const message = added
       ? `Added ${requested.artist} — ${requested.name} to ${job.playlistName || "Needle"}`
       : `${requested.artist} — ${requested.name} is already in ${job.playlistName || "Needle"}`;
@@ -284,8 +348,8 @@
         }
         if (!queue?.length) return;
 
-        const localResponse = await LocalFilesAPI.getTracks();
-        const localTracks = localResponse?.items || localResponse || [];
+        const localTracks = await readLocalTracks(LocalFilesAPI);
+        if (!localTracks) return;
         for (const job of queue) {
           if (activeJobs.has(job.id)) continue;
           activeJobs.add(job.id);
@@ -318,10 +382,13 @@
     ensurePlaylist,
     confirmPlaylistAddition,
     findLocalTrack,
+    localTrackMatch,
     findPlaylistInRootlist,
     normalize,
     playlistIndex,
     playlistURI,
+    reportProgress,
+    readLocalTracks,
     start,
     trackKey,
   };

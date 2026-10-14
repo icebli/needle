@@ -81,12 +81,20 @@ struct TrackRow: View {
                 }.font(.caption)
             }
             if let detail = track.errorDetail {
-                DisclosureGroup("Details") { Text(detail).font(.caption).textSelection(.enabled) }.font(.caption)
+                if track.spotifyStatus == .pending {
+                    Text(detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                } else {
+                    DisclosureGroup("Details") { Text(detail).font(.caption).textSelection(.enabled) }.font(.caption)
+                }
             }
         }.padding(.vertical, 12)
     }
 
     private func activityLabel(for track: TrackRequest) -> String {
+        if track.spotifyStatus == .pending,
+           track.errorDetail?.hasPrefix("Open Spotify Local Files and choose the recording:") == true {
+            return "File saved · Spotify needs a recording choice"
+        }
         guard track.spotifyStatus == .pending,
               let playlist = track.spotifyPlaylistName,
               track.savedPath != nil else { return track.stage.label }
@@ -94,6 +102,10 @@ struct TrackRow: View {
     }
 
     private func activitySymbol(for track: TrackRequest) -> String {
+        if track.spotifyStatus == .pending,
+           track.errorDetail?.hasPrefix("Open Spotify Local Files and choose the recording:") == true {
+            return "exclamationmark.triangle"
+        }
         if track.spotifyStatus == .added { return "checkmark.circle.fill" }
         if track.spotifyStatus == .failed || track.stage == .failed { return "exclamationmark.triangle.fill" }
         if track.spotifyStatus == .pending { return "hourglass" }

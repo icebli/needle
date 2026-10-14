@@ -1,9 +1,9 @@
 import Foundation
 
 enum Destination: String, CaseIterable, Identifiable {
-    case addMusic = "Add Music", reviewQueue = "Review Queue", activity = "Activity", library = "Library"
+    case addMusic = "Add Music", reviewQueue = "Review Queue", discover = "Discover", activity = "Activity", library = "Library"
     var id: String { rawValue }
-    var symbol: String { switch self { case .addMusic: "plus.circle.fill"; case .reviewQueue: "list.bullet.rectangle"; case .activity: "clock.fill"; case .library: "music.note.list" } }
+    var symbol: String { switch self { case .addMusic: "plus.circle.fill"; case .reviewQueue: "list.bullet.rectangle"; case .discover: "sparkles"; case .activity: "clock.fill"; case .library: "music.note.list" } }
 }
 
 struct NeedleSettings: Codable, Equatable {
@@ -165,6 +165,6 @@ struct Candidate: Codable {
 struct Score: Codable { let confidence: Double?; let status: String; let positives: [String]; let warnings: [String]; let rejects: [String] }
 
 struct HostReceipt: Codable { let ok: Bool; let jobId: String?; let error: String? }
-struct HostStatus: Codable { let ok: Bool; let status: String; let playlistUri: String?; let addedUri: String? }
+struct HostStatus: Codable { let ok: Bool; let status: String; let playlistUri: String?; let addedUri: String?; var detail: String? = nil }
 struct DoctorResponse: Codable { let ok: Bool; let tools: [DoctorTool] }
 struct DoctorTool: Codable { let name: String?; let path: String?; let ok: Bool?; let optional: Bool?; let message: String?; let version: String? }

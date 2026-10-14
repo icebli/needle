@@ -103,3 +103,11 @@ needle library-scan ~/Music/needle --json
 ```
 
 Recursively lists supported audio files and their embedded tags without modifying them. Hidden files, repair backups, temporary files, and symbolic links are skipped. Unreadable tags produce warnings while the file remains visible for review.
+
+### Artist discovery
+
+```bash
+needle discover "Artist name" --source auto --json
+```
+
+Searches bounded YouTube and SoundCloud results for the artist, retaining exact URLs and reported source views/bitrate. It does not download or check Spotify availability; use Discover in the desktop app for catalog checks and review. Unknown popularity or quality stays unknown.
