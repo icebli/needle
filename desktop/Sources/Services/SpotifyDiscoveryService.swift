@@ -23,7 +23,7 @@ enum CatalogAvailability: String, Codable {
         switch self {
         case .found: "Found on Spotify"
         case .noMatch: "No matching Spotify recording found"
-        case .unknown: "Couldn’t check Spotify"
+        case .unknown: "Spotify availability unknown"
         }
     }
 }
@@ -121,8 +121,12 @@ enum DiscoveryMatching {
 
     static func matchingTrack(_ tracks: [SpotifyCatalogTrack], artist: SpotifyArtist, title: String) -> SpotifyCatalogTrack? {
         tracks.first { track in
-            track.artists.contains { $0.id == artist.id || normalized($0.name) == normalized(artist.name) }
-                && comparableTitle(track.name, artist: artist.name) == comparableTitle(title, artist: artist.name)
+            guard track.artists.contains(where: { $0.id == artist.id || normalized($0.name) == normalized(artist.name) }) else { return false }
+            // A favorite artist may be a guest: use the returned credits to
+            // recognize "Main Artist - Song feat. Favorite Artist" uploads.
+            return ([artist.name] + track.artists.map(\.name)).contains { credit in
+                comparableTitle(track.name, artist: credit) == comparableTitle(title, artist: credit)
+            }
         }
     }
 
@@ -152,7 +156,7 @@ enum DiscoveryMatching {
         // "Audio" and its official/lyrics decorations identify the upload,
         // not a distinct recording. Strip only trailing neutral decorations;
         // remix/live/version tokens remain part of the identity.
-        for suffix in [" official audio", " official video", " audio", " video", " lyrics"] {
+        for suffix in [" official music video", " official lyric video", " official audio", " official video", " lyric video", " audio", " video", " lyrics"] {
             if value.hasSuffix(suffix) { value.removeLast(suffix.count) }
         }
         return value.trimmingCharacters(in: .whitespacesAndNewlines)

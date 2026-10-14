@@ -47,6 +47,7 @@ struct DiscoveryView: View {
                         if store.isSearching {
                             HStack { ProgressView().controlSize(.small); Text(store.progress).lineLimit(2); Spacer(); Button("Stop") { store.cancel() } }
                         }
+                        if let notice = store.catalogNotice { Text(notice).font(.callout).textSelection(.enabled) }
                         Toggle("Show recordings found on Spotify", isOn: $showCatalogMatches).toggleStyle(.checkbox)
                         Text("Ranked by reported source plays/views among these search results. No exact catalog match is a lead to review, not proof a song is unavailable everywhere.")
                             .font(.caption).foregroundStyle(.secondary)
@@ -82,9 +83,20 @@ private struct DiscoveryRecordingRow: View {
             Label(recording.availability.label, systemImage: recording.availability == .found ? "checkmark.circle" : "questionmark.circle")
                 .font(.caption).foregroundStyle(recording.availability == .unknown ? .orange : .secondary)
             CandidateMetadataView(candidate: recording.candidate)
+            if recording.availability == .unknown {
+                Text("This check failed. Needle does not yet know whether this recording is on Spotify. Keep Spotify open, enable or update the companion in setup, then retry.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if let detail = recording.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
             HStack {
                 Link("Open source", destination: URL(string: recording.candidate.url)!)
+                if recording.availability != .found {
+                    Button("Retry Spotify check", systemImage: "arrow.clockwise") { model.discovery.retryCatalog(recording) }
+                        .disabled(model.discovery.isSearching || model.discovery.isSyncing)
+                }
+                if let uri = recording.catalogURI, uri.hasPrefix("spotify:track:"), let url = URL(string: uri) {
+                    Link("Open in Spotify", destination: url)
+                }
                 Spacer()
                 Button("Preview & review", systemImage: "play.circle") {
                     model.reviewQueue.addDiscovery(recording, settings: model.settings.value)

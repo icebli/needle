@@ -11,6 +11,7 @@ final class DiscoveryStore {
     var progress = ""
     var error: String?
     var warnings: [String] = []
+    var catalogNotice: String?
     var lastSynced: Date?
     private let spotify = SpotifyDiscoveryService()
     private let cli = NeedleCLIService()
@@ -49,7 +50,7 @@ final class DiscoveryStore {
         guard !isSearching, !isSyncing else { return }
         let selection = Array(artists.filter { selectedArtistIDs.contains($0.id) }.prefix(5))
         guard !selection.isEmpty else { error = "Select up to five artists to search."; return }
-        isSearching = true; error = nil; warnings = []; recordings = []
+        isSearching = true; error = nil; catalogNotice = nil; warnings = []; recordings = []
         task = Task {
             defer { isSearching = false; progress = ""; persist() }
             var seen = Set<String>()
@@ -95,6 +96,36 @@ final class DiscoveryStore {
                 catch { warnings.append("\(artist.name): \(error.localizedDescription)") }
             }
             recordings.sort { ($0.candidate.viewCount ?? 0) > ($1.candidate.viewCount ?? 0) }
+        }
+    }
+
+    func retryCatalog(_ recording: DiscoveryRecording, lookup: ((String, String) async throws -> [SpotifyCatalogTrack])? = nil) {
+        guard !isSearching, !isSyncing else { return }
+        isSearching = true; catalogNotice = nil
+        progress = "Checking Spotify: \(recording.artist.name) — \(recording.title)"
+        task = Task {
+            defer { isSearching = false; progress = ""; persist() }
+            var updated: DiscoveryRecording
+            do {
+                let tracks: [SpotifyCatalogTrack]
+                if let lookup { tracks = try await lookup(recording.artist.name, recording.title) }
+                else { tracks = try await spotify.catalog(artist: recording.artist.name, title: recording.title) }
+                guard !Task.isCancelled else { return }
+                if let match = DiscoveryMatching.matchingTrack(tracks, artist: recording.artist, title: recording.title) {
+                    updated = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
+                        availability: .found, catalogURI: match.uri)
+                    catalogNotice = "Found on Spotify: \(recording.title). Enable Show recordings found on Spotify to open it."
+                } else {
+                    updated = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
+                        availability: .noMatch, detail: "The check completed with no exact artist/title match. Alternate titles, versions, or regional availability can affect results.")
+                    catalogNotice = "Check complete: no exact Spotify match for \(recording.title)."
+                }
+            } catch {
+                updated = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
+                    availability: .unknown, detail: error.localizedDescription)
+                catalogNotice = "Spotify check failed. Availability is still unknown."
+            }
+            if let index = recordings.firstIndex(where: { $0.id == recording.id }) { recordings[index] = updated }
         }
     }
 

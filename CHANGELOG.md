@@ -2,6 +2,13 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.6.1
+
+- Recognize featured artists and neutral upload decorations when matching Spotify titles, while keeping remixes and live versions distinct.
+- Retry failed Spotify catalog checks individually, with clear unknown, matched, and no-exact-match results.
+- Companion setup now quits and reopens Spotify so the enabled extensions are active immediately.
+- Includes the discovery, bulk Spotify delivery, and delivery reliability improvements below.
+
 ## 0.6.0
 
 - Discover popular uploads from your top Spotify artists, check for exact catalog matches, and send interesting recordings to Review Queue for preview and approval.

@@ -52,6 +52,14 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertNotNil(DiscoveryMatching.matchingTrack([live], artist: drake, title: "Song feat. Drake (Live)"))
     }
 
+    func testFeaturedFavoriteArtistMatchesMainArtistUploadPrefix() {
+        let drake = SpotifyArtist(id: "drake", name: "Drake", uri: "spotify:artist:drake")
+        let track = SpotifyCatalogTrack(id: "odio", name: "Odio (feat. Drake)", uri: "spotify:track:odio",
+            artists: [SpotifyArtistCredit(id: "romeo", name: "Romeo Santos"), SpotifyArtistCredit(id: "drake", name: "Drake")])
+        XCTAssertNotNil(DiscoveryMatching.matchingTrack([track], artist: drake, title: "Romeo Santos - Odio Feat. Drake (Lyric Video)"))
+        XCTAssertNil(DiscoveryMatching.matchingTrack([track], artist: drake, title: "Romeo Santos - Odio Feat. Drake (Remix)"))
+    }
+
     func testTitleCleanupRetainsRemixAndLiveMarkers() {
         XCTAssertEqual(DiscoveryMatching.title("Doechii - Nissan Altima (Whethan Remix) [Official Audio]", artist: "Doechii"), "Nissan Altima (Whethan Remix)")
         XCTAssertEqual(DiscoveryMatching.title("Other Artist - Song (Live)", artist: "Doechii"), "Other Artist - Song (Live)")
