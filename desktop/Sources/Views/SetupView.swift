@@ -3,12 +3,14 @@ import AppKit
 
 struct SetupView: View {
     let model: AppModel
+    var expandedInitially = false
+    @State private var expanded = false
     @State private var installingCompanion = false
     @State private var companionMessage: String?
     private var folder: String { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Music/needle").path }
 
     var body: some View {
-        DisclosureGroup {
+        DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("1. In Spotify desktop Settings, enable Show Local Files.")
                 Text("2. Add this folder as a source:")
@@ -54,6 +56,7 @@ struct SetupView: View {
                   systemImage: model.tools?.ok == true ? "checkmark.circle" : "slider.horizontal.3")
                 .font(.callout.weight(.medium))
         }
+        .onAppear { if expandedInitially { expanded = true } }
         .padding(18).background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
     }
 }

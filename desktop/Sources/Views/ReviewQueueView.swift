@@ -8,11 +8,11 @@ struct ReviewQueueView: View {
     private var queue: ReviewQueue { model.reviewQueue }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Review Queue").font(.largeTitle.bold())
-                    Text("Approve each recording. Downloads keep going while you review.")
+                    Text("Choose a recording before it is saved.")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -20,7 +20,14 @@ struct ReviewQueueView: View {
                     ProgressView().controlSize(.small)
                     Text("\(queue.activeDownloads) downloading").font(.callout)
                 }
-                Button("Paste a list", systemImage: "text.badge.plus") { showImport = true }
+                Menu {
+                    Toggle("Keep preview position", isOn: $preview.keepTimestampAcrossCandidates)
+                    Button("Paste a list", systemImage: "text.badge.plus") { showImport = true }
+                } label: {
+                    Label("Queue actions", systemImage: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                Button("Add recordings", systemImage: "plus") { showImport = true }
                     .buttonStyle(.borderedProminent).tint(.orange)
             }
             if queue.items.isEmpty {
@@ -36,9 +43,11 @@ struct ReviewQueueView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         List(selection: Binding(get: { queue.selectedID }, set: { queue.selectedID = $0 })) {
                             ForEach(queue.items) { item in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(item.label).lineLimit(2).font(.callout.weight(.medium))
-                                    Text(item.state.label).font(.caption).foregroundStyle(item.state == .failed ? .orange : .secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.title.isEmpty ? item.label : item.title)
+                                        .lineLimit(1).font(.callout.weight(.medium))
+                                    Text(queueSubtitle(for: item)).lineLimit(1).font(.caption)
+                                        .foregroundStyle(queueStateColor(item.state))
                                 }.padding(.vertical, 5).tag(item.id)
                             }
                         }.listStyle(.inset)
@@ -81,6 +90,14 @@ struct ReviewQueueView: View {
         .onDisappear { preview.stop() }
         .task { queue.searchNext() }
     }
+
+    private func queueStateColor(_ state: ReviewState) -> Color {
+        state == .failed ? .orange : .secondary
+    }
+
+    private func queueSubtitle(for item: ReviewItem) -> String {
+        item.artist.isEmpty ? item.state.label : "\(item.artist) · \(item.state.label)"
+    }
 }
 
 private struct ReviewItemView: View {
@@ -103,7 +120,7 @@ private struct ReviewItemView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(item.label).font(.title2.bold()).textSelection(.enabled)
@@ -131,16 +148,30 @@ private struct ReviewItemView: View {
                 }
                 if item.state == .ready, let response = item.response {
                     HStack {
-                        Toggle("Add to \(item.settings.playlistName) in Spotify after saving", isOn: $spotify)
-                            .toggleStyle(.checkbox).disabled(item.settings.format != "mp3")
+                        Toggle("Add to Spotify playlist ‘\(item.settings.playlistName)’", isOn: $spotify)
+                            .toggleStyle(.checkbox)
+                            .disabled(item.settings.format != "mp3")
+                            .help("Needle saves the local file either way. With the companion, it also adds the MP3 to this playlist.")
                         Spacer()
-                        Button("Edit request") { showEdit.toggle() }
+                        Menu {
+                            Button("Edit request") { showEdit.toggle() }
+                            if hasRejectedCandidates {
+                                Toggle("Show excluded recordings", isOn: $showExcluded)
+                                    .toggleStyle(.checkbox)
+                            }
+                        } label: {
+                            Label("Review options", systemImage: "ellipsis.circle")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
                     }
-                    Text("Playlist delivery requires the Spotify companion. The local file is saved either way.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Toggle("Show excluded recordings", isOn: $showExcluded).toggleStyle(.checkbox)
+                    if item.settings.format != "mp3" {
+                        Text("Spotify delivery requires MP3.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                     ForEach(response.candidates.filter { showExcluded || $0.score.status != "rejected" }) { candidate in
-                        CandidateCard(result: candidate, disabled: false, preview: preview, saveLabel: "Approve & download") {
+                        CandidateCard(result: candidate, disabled: false, preview: preview,
+                                      saveLabel: "Approve & download", showsPreviewPositionOption: false) {
                             preview.stop(); queue.approve(candidate, itemID: item.id, spotify: spotify)
                         }
                     }
@@ -155,5 +186,9 @@ private struct ReviewItemView: View {
         }
         .onChange(of: item.artist) { artist = item.artist }
         .onChange(of: item.title) { title = item.title }
+    }
+
+    private var hasRejectedCandidates: Bool {
+        item.response?.candidates.contains { $0.score.status == "rejected" } == true
     }
 }

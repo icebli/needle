@@ -40,17 +40,29 @@ struct CandidateMetadataView: View {
     private var facts: Candidate { inspected ?? candidate }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 12) {
-            Label("Source audio: \(CandidateMetadataFormatting.bitrate(facts.audioBitrateKbps))", systemImage: "waveform")
+        HStack(spacing: 10) {
+            Label(facts.audioBitrateKbps == nil ? "Bitrate unknown" : CandidateMetadataFormatting.bitrate(facts.audioBitrateKbps),
+                  systemImage: "waveform")
             Label("\(CandidateMetadataFormatting.views(facts.viewCount)) views", systemImage: "eye")
                 .help(facts.viewCount.map { "\($0.formatted()) views reported by the source" } ?? "The source did not report a view count.")
-            }
             if facts.audioBitrateKbps == nil {
-                Button(checking ? "Checking source quality…" : "Check source quality") { inspect() }
-                    .disabled(checking)
+                Menu {
+                    Button(checking ? "Checking source quality…" : "Check source quality") { inspect() }
+                        .disabled(checking)
+                } label: {
+                    Image(systemName: checking ? "hourglass" : "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Source quality is unknown. Check it when you need more detail.")
             }
-            if let failure { Text(failure).foregroundStyle(.orange).lineLimit(2) }
+            if let failure {
+                Label(failure, systemImage: "exclamationmark.circle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .help(failure)
+            }
         }
         .font(.caption)
         .foregroundStyle(.secondary)

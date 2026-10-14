@@ -3,6 +3,7 @@ import SwiftUI
 struct PreviewControlsView: View {
     @ObservedObject var service: AudioPreviewService
     let candidate: CandidateResult
+    var showsPositionOption = true
 
     private var isCurrent: Bool { service.candidateID == candidate.id }
     private var value: Binding<Double> {
@@ -10,11 +11,8 @@ struct PreviewControlsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                Label("Preview", systemImage: "headphones")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
                 if isCurrent && service.isPreparing {
                     ProgressView().controlSize(.small)
                     Text("Preparing a full-track preview…")
@@ -27,7 +25,7 @@ struct PreviewControlsView: View {
                     Spacer()
                     Button("Retry") { service.retry(candidate: candidate) }
                 } else {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 8) {
                             Button {
                                 if isCurrent { service.togglePlayback() } else { service.start(candidate: candidate) }
@@ -58,23 +56,19 @@ struct PreviewControlsView: View {
                     }
                 }
             }
-            if isCurrent, !service.isPreparing, service.duration > 0 {
-                HStack(spacing: 12) {
-                    Toggle("Keep position when switching sources", isOn: $service.keepTimestampAcrossCandidates)
-                        .toggleStyle(.checkbox)
-                    Text("Full track · temporary")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .padding(.leading, 2)
+            if isCurrent, showsPositionOption, !service.isPreparing, service.duration > 0 {
+                Toggle("Keep position when switching sources", isOn: $service.keepTimestampAcrossCandidates)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
             }
             if isCurrent, case .failed = service.state {
-                Text("Needle keeps previews temporary and does not save them to your library.")
+                Text("Preview is temporary and is not saved to your library.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .font(.callout)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background {
             if #available(macOS 26.0, *) {
                 Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12))

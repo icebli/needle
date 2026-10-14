@@ -22,7 +22,7 @@ enum CatalogAvailability: String, Codable {
     var label: String {
         switch self {
         case .found: "Found on Spotify"
-        case .noMatch: "No matching Spotify recording found"
+        case .noMatch: "No exact match on Spotify"
         case .unknown: "Spotify availability unknown"
         }
     }

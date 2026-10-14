@@ -120,6 +120,7 @@ struct CandidateCard: View {
     let disabled: Bool
     let preview: AudioPreviewService
     let saveLabel: String
+    var showsPreviewPositionOption = true
     let save: () -> Void
     private var rejected: Bool { result.score.status == "rejected" }
     private var source: URL? { AppModel.mediaURL(result.candidate.url) }
@@ -129,10 +130,10 @@ struct CandidateCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
                 artwork
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(result.candidate.title).font(.headline).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(result.candidate.uploader ?? result.candidate.provider).foregroundStyle(.secondary)
@@ -143,27 +144,37 @@ struct CandidateCard: View {
             Label(rejected ? "Excluded recording" : result.score.status == "recommended" ? "Recommended match" : "Please check this version",
                   systemImage: rejected ? "nosign" : result.score.status == "recommended" ? "checkmark.seal" : "exclamationmark.triangle")
                 .font(.caption.weight(.semibold)).foregroundStyle(rejected ? Color.secondary : Color.orange)
-            HStack {
+            PreviewControlsView(service: preview, candidate: result,
+                                showsPositionOption: showsPreviewPositionOption)
+            ForEach(Array(uniqueReasons.enumerated()), id: \.offset) { _, reason in
+                Label(reason, systemImage: rejected ? "xmark.circle" : "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 12) {
                 Button("Open source") { if let source { NSWorkspace.shared.open(source) } }
                     .disabled(source == nil)
+                    .buttonStyle(.borderless)
+                Menu {
+                    ForEach(Array(result.score.positives.enumerated()), id: \.offset) { _, reason in
+                        Text(reason)
+                    }
+                    Text("Resolver score: \(Int(result.score.confidence ?? 0)) · ranking signal only")
+                } label: {
+                    Label("Details", systemImage: "info.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
                 Spacer(minLength: 8)
                 Button(saveLabel, action: save).buttonStyle(.borderedProminent).tint(.orange)
                     .fixedSize().disabled(rejected || disabled || source == nil)
             }
-            PreviewControlsView(service: preview, candidate: result)
-            ForEach(Array((rejected ? result.score.rejects : result.score.warnings).enumerated()), id: \.offset) { _, reason in
-                Label(reason, systemImage: rejected ? "xmark.circle" : "exclamationmark.circle")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            DisclosureGroup("Why this match?") {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(result.score.positives.enumerated()), id: \.offset) { _, reason in Text(reason) }
-                    Text("Resolver score: \(Int(result.score.confidence ?? 0)). This is a ranking signal, not fingerprint verification.")
-                        .foregroundStyle(.secondary)
-                }.font(.caption).padding(.top, 6)
-            }.font(.caption)
         }
         .padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var uniqueReasons: [String] {
+        var seen = Set<String>()
+        return (rejected ? result.score.rejects : result.score.warnings).filter { seen.insert($0).inserted }
     }
 
     private var artwork: some View {

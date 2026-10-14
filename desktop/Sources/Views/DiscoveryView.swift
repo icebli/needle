@@ -3,107 +3,228 @@ import SwiftUI
 struct DiscoveryView: View {
     let model: AppModel
     @State private var showCatalogMatches = false
+    @State private var showArtists = false
+    @State private var showSetup = false
     private var store: DiscoveryStore { model.discovery }
+    private var busy: Bool { store.isSyncing || store.isSearching }
+    private var selectedArtists: [SpotifyArtist] { store.artists.filter { store.selectedArtistIDs.contains($0.id) } }
     private var visible: [DiscoveryRecording] {
         store.recordings.filter { showCatalogMatches || $0.availability != .found }
     }
+    private var artistSummary: String {
+        let names = selectedArtists.prefix(2).map(\.name).joined(separator: ", ")
+        return names.isEmpty ? "Choose artists" : names + (selectedArtists.count > 2 ? " +\(selectedArtists.count - 2)" : "")
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Discover").font(.largeTitle.bold())
-                    Text("Explore recordings from your favorite artists beyond Spotify’s catalog.").foregroundStyle(.secondary)
+                    Text("Find recordings beyond Spotify.").foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(store.isSyncing ? "Syncing…" : "Sync top artists", systemImage: "arrow.triangle.2.circlepath") { store.sync() }
-                    .disabled(store.isSyncing || store.isSearching)
-                    .buttonStyle(.borderedProminent).tint(.orange)
+                Menu {
+                    Button("Sync top artists", systemImage: "arrow.triangle.2.circlepath") { store.sync() }.disabled(busy)
+                    Button("Spotify setup…", systemImage: "slider.horizontal.3") { showSetup = true }
+                } label: { Label("Spotify", systemImage: "ellipsis.circle") }
+                .menuStyle(.borderlessButton).fixedSize()
             }
-            Text("Requires Spotify and Needle’s Spicetify companion. Sync reads your top 20 artists over roughly six months; your credentials stay in Spotify.")
-                .font(.callout).foregroundStyle(.secondary)
-            SetupView(model: model)
-            if let error = store.error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).textSelection(.enabled) }
+            if let error = store.error {
+                HStack(alignment: .top) {
+                    Label(error, systemImage: "exclamationmark.triangle").textSelection(.enabled)
+                    Spacer()
+                    Button("Spotify setup") { showSetup = true }
+                }.font(.callout).foregroundStyle(.orange)
+            }
             if store.artists.isEmpty {
-                ContentUnavailableView("Start with your top artists", systemImage: "sparkles",
-                    description: Text("Open Spotify, enable Needle’s companion in setup, then sync. Needle never downloads discovery results until you approve them."))
+                ContentUnavailableView {
+                    Label(store.isSyncing ? "Reading your top artists…" : "Start with your favorite artists", systemImage: "music.note.list")
+                } description: {
+                    Text("Connect through Spotify’s Needle companion, then choose who to explore.")
+                } actions: {
+                    Button("Sync top artists") { store.sync() }.disabled(busy)
+                        .buttonStyle(.borderedProminent).tint(.orange)
+                    Button("Set up Spotify") { showSetup = true }
+                }
             } else {
-                HSplitView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Your top artists").font(.headline)
-                        Text("Choose up to five per search.").font(.caption).foregroundStyle(.secondary)
-                        List(Array(store.artists.enumerated()), id: \.element.id) { index, artist in
-                            Toggle(isOn: Binding(get: { store.selectedArtistIDs.contains(artist.id) }, set: { value in
-                                if value { store.selectedArtistIDs.insert(artist.id) } else { store.selectedArtistIDs.remove(artist.id) }
-                            })) { Text("\(index + 1). \(artist.name)").lineLimit(2) }
-                            .toggleStyle(.checkbox)
-                            .disabled(store.isSearching || (!store.selectedArtistIDs.contains(artist.id) && store.selectedArtistIDs.count >= 5))
-                        }.listStyle(.inset)
-                        Button("Find recordings", systemImage: "magnifyingglass") { store.find(settings: model.settings.value, library: model.history.tracks) }
-                            .disabled(store.selectedArtistIDs.isEmpty || store.isSearching || store.isSyncing)
-                        if let date = store.lastSynced { Text("Synced \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
-                    }.frame(minWidth: 180, idealWidth: 220, maxWidth: 260)
-                    VStack(alignment: .leading, spacing: 12) {
-                        if store.isSearching {
-                            HStack { ProgressView().controlSize(.small); Text(store.progress).lineLimit(2); Spacer(); Button("Stop") { store.cancel() } }
+                HStack(spacing: 12) {
+                    Button { showArtists = true } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "person.2")
+                            Text(artistSummary).lineLimit(1)
+                            Text("\(selectedArtists.count) selected").foregroundStyle(.secondary)
+                            Image(systemName: "chevron.down").font(.caption)
                         }
-                        if let notice = store.catalogNotice { Text(notice).font(.callout).textSelection(.enabled) }
-                        Toggle("Show recordings found on Spotify", isOn: $showCatalogMatches).toggleStyle(.checkbox)
-                        Text("Ranked by reported source plays/views among these search results. No exact catalog match is a lead to review, not proof a song is unavailable everywhere.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        if visible.isEmpty && !store.isSearching {
-                            ContentUnavailableView("Explore another artist", systemImage: "waveform", description: Text("Select artists and find recordings. Existing Library recordings and exact Spotify matches are hidden."))
-                        } else {
-                            ScrollView {
-                                LazyVStack(alignment: .leading, spacing: 16) {
-                                    ForEach(visible) { recording in DiscoveryRecordingRow(recording: recording, model: model) }
-                                }
+                    }
+                    .disabled(busy).popover(isPresented: $showArtists) { artistChooser }
+                    .accessibilityLabel("Choose artists, \(selectedArtists.count) selected")
+                    Spacer(minLength: 8)
+                    Button("Find recordings", systemImage: "magnifyingglass") {
+                        store.find(settings: model.settings.value, library: model.history.tracks)
+                    }.buttonStyle(.borderedProminent).tint(.orange)
+                        .disabled(selectedArtists.isEmpty || busy)
+                }
+                if store.isSearching || store.isSyncing {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text(store.isSyncing ? "Syncing artists…" : store.progress).lineLimit(1)
+                        Spacer()
+                        Button("Stop") { store.cancel() }.buttonStyle(.borderless)
+                    }.font(.callout).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Picker("Recordings", selection: $showCatalogMatches) {
+                        Text("To review (\(store.recordings.filter { $0.availability != .found }.count))").tag(false)
+                        Text("All recordings (\(store.recordings.count))").tag(true)
+                    }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 320)
+                    Spacer()
+                    if !store.recordings.isEmpty {
+                        Text("Most played first").font(.caption).foregroundStyle(.secondary)
+                            .help("Reported plays/views among these source results, not a complete ranking.")
+                    }
+                }
+                if let notice = store.catalogNotice {
+                    HStack {
+                        Text(notice).lineLimit(2)
+                        Spacer()
+                        if notice.hasPrefix("Found on Spotify"), !showCatalogMatches {
+                            Button("Show match") { showCatalogMatches = true }
+                        }
+                    }.font(.callout).foregroundStyle(.secondary)
+                }
+                if visible.isEmpty {
+                    ContentUnavailableView(emptyTitle, systemImage: store.recordings.isEmpty ? "waveform" : "checkmark.circle",
+                        description: Text(emptyDescription))
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(visible) { recording in
+                                DiscoveryRecordingRow(recording: recording, model: model, showSetup: { showSetup = true })
+                                Divider()
                             }
                         }
-                        if !store.warnings.isEmpty {
-                            DisclosureGroup("\(store.warnings.count) search notices") {
-                                ScrollView { Text(store.warnings.joined(separator: "\n")).font(.caption).textSelection(.enabled) }.frame(maxHeight: 100)
-                            }
-                        }
-                    }.frame(minWidth: 420).padding(.leading, 12)
+                    }
+                }
+                if !store.warnings.isEmpty {
+                    DisclosureGroup("Search notices (\(store.warnings.count))") {
+                        ScrollView { Text(store.warnings.joined(separator: "\n")).font(.caption).textSelection(.enabled) }.frame(maxHeight: 90)
+                    }.font(.caption).foregroundStyle(.secondary)
                 }
             }
-        }.padding(24)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sheet(isPresented: $showSetup) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Spotify setup").font(.title2.bold())
+                ScrollView { SetupView(model: model, expandedInitially: true) }
+                HStack { Spacer(); Button("Done") { showSetup = false }.keyboardShortcut(.defaultAction) }
+            }.padding(24).frame(width: 600, height: 550)
+        }
+    }
+
+    private var artistChooser: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Choose artists").font(.headline)
+            Text("Select up to five. Choose one for a deeper search.").font(.callout).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(Array(store.artists.enumerated()), id: \.element.id) { index, artist in
+                        Toggle(isOn: Binding(get: { store.selectedArtistIDs.contains(artist.id) }, set: { value in
+                            if value { store.selectedArtistIDs.insert(artist.id) } else { store.selectedArtistIDs.remove(artist.id) }
+                        })) { Text("\(index + 1). \(artist.name)") }
+                        .toggleStyle(.checkbox)
+                        .disabled(busy || (!store.selectedArtistIDs.contains(artist.id) && store.selectedArtistIDs.count >= 5))
+                        .help("Up to five artists per search. Uncheck one to choose another.")
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+            }.frame(height: 330)
+            HStack {
+                if let date = store.lastSynced { Text("Synced \(date.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(.secondary) }
+                Spacer()
+                Button("Done") { showArtists = false }.keyboardShortcut(.defaultAction)
+            }
+        }.padding(20).frame(width: 340)
+    }
+
+    private var emptyTitle: String {
+        if busy { return "Finding recordings…" }
+        if store.error != nil { return "Search needs attention" }
+        if !store.recordings.isEmpty { return "These recordings are already on Spotify" }
+        return store.hasSearched ? "Nothing new found" : "Explore your artists"
+    }
+    private var emptyDescription: String {
+        if busy { return "Results appear here as each recording is checked." }
+        if store.error != nil { return "Check the message above, then try again." }
+        if !store.recordings.isEmpty { return "View All recordings to open a Spotify match, or try another artist." }
+        if store.hasSearched { return "Try another artist or source. Recordings already in your Library are skipped." }
+        return "Choose artists and find recordings. Preview anything you like before saving."
     }
 }
 
 private struct DiscoveryRecordingRow: View {
     let recording: DiscoveryRecording
     let model: AppModel
+    let showSetup: () -> Void
+    @State private var showDetails = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(recording.title).font(.headline).textSelection(.enabled)
-            Text("\(recording.artist.name) · \(recording.candidate.provider) · \(recording.candidate.uploader ?? "Unknown uploader")")
-                .font(.callout).foregroundStyle(.secondary)
-            Label(recording.availability.label, systemImage: recording.availability == .found ? "checkmark.circle" : "questionmark.circle")
-                .font(.caption).foregroundStyle(recording.availability == .unknown ? .orange : .secondary)
-            CandidateMetadataView(candidate: recording.candidate)
-            if recording.availability == .unknown {
-                Text("This check failed. Needle does not yet know whether this recording is on Spotify. Keep Spotify open, enable or update the companion in setup, then retry.")
-                    .font(.caption).foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 16) {
+            AsyncImage(url: recording.candidate.thumbnailURL.flatMap { AppModel.mediaURL($0) }) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                Image(systemName: "music.note").font(.title2).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity).background(.quaternary)
             }
-            if let detail = recording.detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
-            HStack {
-                Link("Open source", destination: URL(string: recording.candidate.url)!)
-                if recording.availability != .found {
-                    Button("Retry Spotify check", systemImage: "arrow.clockwise") { model.discovery.retryCatalog(recording) }
-                        .disabled(model.discovery.isSearching || model.discovery.isSyncing)
+            .frame(width: 64, height: 64).clipShape(RoundedRectangle(cornerRadius: 8))
+            .accessibilityLabel("Source artwork for \(recording.title)")
+            VStack(alignment: .leading, spacing: 7) {
+                Text(recording.title).font(.headline).lineLimit(2).textSelection(.enabled)
+                Text("\(recording.artist.name) · \(recording.candidate.provider.capitalized) · \(recording.candidate.uploader ?? "Unknown uploader")\(duration)")
+                    .font(.callout).foregroundStyle(.secondary)
+                CandidateMetadataView(candidate: recording.candidate)
+                Label(recording.availability.label, systemImage: recording.availability == .found ? "checkmark.circle" : recording.availability == .unknown ? "exclamationmark.circle" : "magnifyingglass")
+                    .font(.caption).foregroundStyle(recording.availability == .unknown ? .orange : .secondary)
+                if recording.availability == .unknown {
+                    Text("The check failed; this does not mean the song is absent.").font(.caption).foregroundStyle(.secondary)
                 }
-                if let uri = recording.catalogURI, uri.hasPrefix("spotify:track:"), let url = URL(string: uri) {
-                    Link("Open in Spotify", destination: url)
+                HStack(spacing: 12) {
+                    if recording.availability == .unknown {
+                        Button("Retry check") { model.discovery.retryCatalog(recording) }
+                            .disabled(model.discovery.isSearching || model.discovery.isSyncing)
+                    }
+                    Button(showDetails ? "Hide details" : "Details") { showDetails.toggle() }.buttonStyle(.borderless)
+                    Spacer()
+                    Menu {
+                        if let url = AppModel.mediaURL(recording.candidate.url) { Link("Open source", destination: url) }
+                        if let uri = recording.catalogURI, uri.hasPrefix("spotify:track:"), let url = URL(string: uri) {
+                            Link("Open in Spotify", destination: url)
+                        }
+                        if recording.availability != .found {
+                            Button("Check Spotify again") { model.discovery.retryCatalog(recording) }
+                                .disabled(model.discovery.isSearching || model.discovery.isSyncing)
+                        }
+                        Button("Spotify setup…", action: showSetup)
+                    } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize()
+                    Button("Preview & review", systemImage: "play.circle") {
+                        model.reviewQueue.addDiscovery(recording, settings: model.settings.value)
+                        model.destination = .reviewQueue
+                    }.buttonStyle(.bordered)
+                }.font(.callout)
+                if showDetails {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Uploaded by \(recording.candidate.uploader ?? "Unknown uploader")")
+                        if let detail = recording.detail { Text(detail) }
+                        if recording.availability == .noMatch { Text("No exact match is a lead to review, not proof of worldwide unavailability.") }
+                    }.font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }
-                Spacer()
-                Button("Preview & review", systemImage: "play.circle") {
-                    model.reviewQueue.addDiscovery(recording, settings: model.settings.value)
-                    model.destination = .reviewQueue
-                }.buttonStyle(.bordered)
-            }
-        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(.vertical, 18)
+    }
+
+    private var duration: String {
+        guard let milliseconds = recording.candidate.durationMs else { return "" }
+        let seconds = milliseconds / 1000
+        return " · \(seconds / 60):\(String(format: "%02d", seconds % 60))"
     }
 }

@@ -2,6 +2,15 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.7.0
+
+- Simpler Discover page with a compact artist chooser, clear review filters, and full-width recording results.
+- Focused Review Queue keeps preview and approval prominent, with less-used controls in menus.
+- Artwork, source bitrate, views, duration, recording warnings, and Spotify status remain visible.
+- Updated in-app guides and source-quality error messages.
+- Updated the bundled TLS library with a security patch.
+- Includes the Spotify discovery, bulk delivery, and reliability improvements below.
+
 ## 0.6.1
 
 - Recognize featured artists and neutral upload decorations when matching Spotify titles, while keeping remixes and live versions distinct.

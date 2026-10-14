@@ -40,14 +40,14 @@ Preview controls include a full-track scrubber, ten-second jumps, and **Skip int
 
 ## Discover recordings from your top artists
 
-Open **Discover** and use its Spotify setup guide to enable or update Needle’s bundled companion. [Spicetify](https://spicetify.app/) must already be installed; enabling the companion restarts Spotify and preserves your other extensions.
+Open **Discover** and choose **Spotify → Spotify setup…** to enable or update Needle’s bundled companion. [Spicetify](https://spicetify.app/) must already be installed; enabling the companion restarts Spotify and preserves your other extensions.
 
-1. Open Spotify and choose **Sync top artists**. Needle reads your top 20 artists over approximately six months and saves the artist list locally.
-2. Select up to five artists and choose **Find recordings**. Needle searches your configured sources and ranks the returned uploads by reported plays/views, skipping recordings already saved in Library.
-3. Check each catalog status. **No matching Spotify recording found** means no exact artist/title match appeared in this search; regional availability and alternate titles can affect results. **Couldn’t check Spotify** means the lookup failed, not that the song is absent. Exact matches are hidden unless you enable **Show recordings found on Spotify**.
+1. Open Spotify and choose **Spotify → Sync top artists**. Needle reads your top 20 artists over approximately six months and saves the artist list locally.
+2. Open **Choose artists**, select up to five artists and choose **Find recordings**. Needle searches your configured sources and ranks the returned uploads by reported plays/views, skipping recordings already saved in Library.
+3. Check each catalog status. **No exact match on Spotify** means no exact artist/title match appeared in this search; regional availability and alternate titles can affect results. **Spotify availability unknown** means the lookup failed, not that the song is absent. Exact matches are hidden under **All recordings**.
 4. Choose **Preview & review**, listen in Review Queue, check artist/title hints and version details, then approve the exact source for download.
 
-If a result says **Spotify availability unknown**, its check failed; this does not mean the recording is absent. Keep Spotify open, enable or update the companion, then choose **Retry Spotify check**. A completed check can report a match or no exact match. Found recordings offer **Open in Spotify**.
+If a result says **Spotify availability unknown**, its check failed; this does not mean the recording is absent. Keep Spotify open, enable or update the companion, then choose **Retry check**. A completed check can report a match or no exact match. Found recordings offer **Open in Spotify**.
 
 Searches share a budget of up to 45 source candidates across the selected artists. Choose one artist for a deeper search. This is a bounded discovery list, not a complete ranking of every recording. **Stop** keeps completed results. If Spotify rate-limits a request, Needle reports the failure and stops catalog checks instead of treating it as an empty catalog. Spotify and Spicetify updates may require updating the companion.
 

@@ -8,6 +8,7 @@ final class DiscoveryStore {
     var recordings: [DiscoveryRecording] = []
     var isSyncing = false
     var isSearching = false
+    var hasSearched = false
     var progress = ""
     var error: String?
     var warnings: [String] = []
@@ -22,12 +23,18 @@ final class DiscoveryStore {
         let artists: [SpotifyArtist]
         let recordings: [DiscoveryRecording]
         let lastSynced: Date?
+        let hasSearched: Bool?
+        let warnings: [String]?
+        let error: String?
     }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         if let data = defaults.data(forKey: "needle.discovery"), let value = try? JSONDecoder().decode(Snapshot.self, from: data) {
             artists = value.artists; recordings = value.recordings; lastSynced = value.lastSynced
+            hasSearched = value.hasSearched ?? !value.recordings.isEmpty
+            warnings = value.warnings ?? []
+            error = value.error
             selectedArtistIDs = Set(artists.prefix(3).map(\.id))
         }
     }
@@ -50,10 +57,11 @@ final class DiscoveryStore {
         guard !isSearching, !isSyncing else { return }
         let selection = Array(artists.filter { selectedArtistIDs.contains($0.id) }.prefix(5))
         guard !selection.isEmpty else { error = "Select up to five artists to search."; return }
-        isSearching = true; error = nil; catalogNotice = nil; warnings = []; recordings = []
+        isSearching = true; hasSearched = true; error = nil; catalogNotice = nil; warnings = []; recordings = []
         task = Task {
             defer { isSearching = false; progress = ""; persist() }
             var seen = Set<String>()
+            var sourceFailures: [String] = []
             for artist in selection {
                 guard !Task.isCancelled else { return }
                 progress = "Finding popular uploads for \(artist.name)…"
@@ -93,9 +101,15 @@ final class DiscoveryStore {
                         try await Task.sleep(for: .milliseconds(350))
                     }
                 } catch is CancellationError { return }
-                catch { warnings.append("\(artist.name): \(error.localizedDescription)") }
+                catch {
+                    warnings.append("\(artist.name): \(error.localizedDescription)")
+                    sourceFailures.append(artist.name)
+                }
             }
             recordings.sort { ($0.candidate.viewCount ?? 0) > ($1.candidate.viewCount ?? 0) }
+            if !sourceFailures.isEmpty {
+                error = "Couldn’t search \(sourceFailures.joined(separator: ", ")). Check the source setup and try again."
+            }
         }
     }
 
@@ -114,7 +128,7 @@ final class DiscoveryStore {
                 if let match = DiscoveryMatching.matchingTrack(tracks, artist: recording.artist, title: recording.title) {
                     updated = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
                         availability: .found, catalogURI: match.uri)
-                    catalogNotice = "Found on Spotify: \(recording.title). Enable Show recordings found on Spotify to open it."
+                    catalogNotice = "Found on Spotify: \(recording.title)."
                 } else {
                     updated = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
                         availability: .noMatch, detail: "The check completed with no exact artist/title match. Alternate titles, versions, or regional availability can affect results.")
@@ -139,7 +153,8 @@ final class DiscoveryStore {
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(Snapshot(artists: artists, recordings: recordings, lastSynced: lastSynced)) {
+        if let data = try? JSONEncoder().encode(Snapshot(artists: artists, recordings: recordings, lastSynced: lastSynced,
+                                                         hasSearched: hasSearched, warnings: warnings, error: error)) {
             defaults.set(data, forKey: "needle.discovery")
         }
     }
