@@ -1,9 +1,15 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-  <channel>
-    <title>Needle updates</title>
-    <link>https://github.com/icebli/needle/releases</link>
-    <description>Verified, signed Needle updates for Apple Silicon Macs.</description>
-    <language>en</language>
-  </channel>
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Needle</title>
+        <item>
+            <title>0.2.8</title>
+            <pubDate>Tue, 13 Oct 2026 09:32:52 -0700</pubDate>
+            <sparkle:version>2008</sparkle:version>
+            <sparkle:shortVersionString>0.2.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/icebli/needle/releases/download/v0.2.8/Needle-0.2.8.dmg" length="105838742" type="application/octet-stream" sparkle:edSignature="RT5NtrTBq7VUAglhEVciA3g1KlWFTHdCy+nrD0/9fK1o1ldneQxYmo5P7BCjRV9PdKAkBDFqy358a+9NiAJdAg=="/>
+        </item>
+    </channel>
 </rss>
