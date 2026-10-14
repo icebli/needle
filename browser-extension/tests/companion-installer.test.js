@@ -52,4 +52,10 @@ test("companion package builds Firefox and Chrome payloads from source", () => {
   ]) {
     assert.match(listing, new RegExp(`^${resource.replace(/[.]/g, "\\.")}$`, "m"), resource);
   }
+  const firefoxZip = path.join(output, "needle-firefox.xpi");
+  const firefoxListing = execFileSync("unzip", ["-Z1", firefoxZip], { encoding: "utf8" });
+  const firefoxManifest = JSON.parse(execFileSync("unzip", ["-p", firefoxZip, "manifest.json"], { encoding: "utf8" }));
+  for (const script of firefoxManifest.background.scripts) {
+    assert.match(firefoxListing, new RegExp(`^${script.replace(/[.]/g, "\\.")}$`, "m"), script);
+  }
 });

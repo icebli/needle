@@ -24,7 +24,7 @@ cp "$REPO_DIR/browser-extension/icons/needle-96.png" "$PACKAGE_DIR/chrome-extens
 FIREFOX_STAGE="$(mktemp -d "${TMPDIR:-/tmp}/needle-firefox.XXXXXX")"
 trap 'rm -rf "$FIREFOX_STAGE"' EXIT
 rm -f "$TARGET_DIR/needle-firefox.xpi" "$PACKAGE_DIR/needle-firefox.xpi"
-for shared_file in browser-compat.js context-capture.js page-probe.js popup.css popup.html popup.js track-detection.js manifest.json; do
+for shared_file in background.js browser-compat.js context-capture.js page-probe.js popup.css popup.html popup.js track-detection.js manifest.json; do
   cp "$REPO_DIR/browser-extension/$shared_file" "$FIREFOX_STAGE/$shared_file"
 done
 cp -R "$REPO_DIR/browser-extension/icons" "$FIREFOX_STAGE/icons"

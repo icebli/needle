@@ -60,7 +60,8 @@ fi
 echo "Needle browser native messaging is installed for Chrome, Firefox, and Zen."
 echo "Chrome: open chrome://extensions, enable Developer mode, choose Load unpacked, and select:"
 echo "  $ROOT_DIR/chrome-extension"
-echo "Firefox/Zen: load $ROOT_DIR/needle-firefox.xpi from the browser's extensions page."
+echo "Firefox/Zen: open about:debugging, choose This Firefox, Load Temporary Add-on, and select:"
+echo "  $ROOT_DIR/needle-firefox.xpi"
 if [[ "${NEEDLE_COMPANION_NO_OPEN:-0}" != 1 ]]; then
   open -a "Google Chrome" "chrome://extensions" 2>/dev/null || true
   open "$ROOT_DIR/chrome-extension" 2>/dev/null || true
