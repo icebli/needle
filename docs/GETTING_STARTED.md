@@ -30,7 +30,9 @@ A high bitrate does not prove a recording is the right version. Needle shows ide
 
 ## Review several recordings
 
-Open **Review Queue**, paste one source link or `Artist — Title` per line, and choose **Add to queue**. Link-only entries ask you to check the artist and title. Review the candidates for each entry, listen, then choose **Approve & download**. Up to two approved recordings download in the background while you review the next one. Spotify delivery is optional and starts off in the queue.
+Drag source links from your browser onto any tab in Needle to add them to **Review Queue**. Needle reads each link and finds candidates automatically. Check the detected artist and title, preview the recording, then approve the download. Use **Edit request** if the detected details need correcting. Dropping a link does not save music automatically.
+
+You can also open **Review Queue**, paste one source link or `Artist — Title` per line, and choose **Add to queue**. Link-only entries ask you to check the artist and title. Review the candidates for each entry, listen, then choose **Approve & download**. Up to two approved recordings download in the background while you review the next one. Spotify delivery is optional and starts off in the queue.
 
 The queue survives restarting Needle. Interrupted work needs your review before downloading again. **Clear finished** removes queue entries, keeping saved music files.
 

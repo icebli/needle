@@ -1,5 +1,6 @@
 import XCTest
 @testable import NeedleDesktop
+import UniformTypeIdentifiers
 
 @MainActor
 final class ReviewQueueTests: XCTestCase {
@@ -11,6 +12,107 @@ final class ReviewQueueTests: XCTestCase {
         XCTAssertEqual(values[1].sourceURL, "https://example.com/track")
         XCTAssertEqual(values[2].state, .needsInput)
         XCTAssertEqual(values[3].title, "B - Remix")
+    }
+
+    func testDropParserAcceptsHTTPLinksAndDeduplicatesAcrossProviders() {
+        let values = SourceURLDropImporter.parse([
+            "https://soundcloud.com/whethan/remix\nhttps://youtu.be/example",
+            "https://soundcloud.com/whethan/remix"
+        ])
+
+        XCTAssertEqual(values, [
+            "https://soundcloud.com/whethan/remix",
+            "https://youtu.be/example"
+        ])
+    }
+
+    func testDropParserRejectsFilesScriptsAndMalformedValues() {
+        let credentialURL = ["https://user:password", "localhost/track"].joined(separator: "@")
+        let values = SourceURLDropImporter.parse([
+            "file:///tmp/track.mp3",
+            "javascript:alert(1)",
+            "ftp://example.com/track",
+            credentialURL,
+            "https:///missing-host",
+            "not a URL",
+            "https://soundcloud.com/whethan/remix"
+        ])
+
+        XCTAssertEqual(values, ["https://soundcloud.com/whethan/remix"])
+    }
+
+    func testDropParserPreservesInputOrderAndReportsLimits() {
+        let values = (0..<105).map { "https://example.com/track\($0)" }
+        let result = SourceURLDropImporter.parseResult(values + [values[0], "file:///tmp/track.mp3"])
+
+        XCTAssertEqual(result.accepted.count, 100)
+        XCTAssertEqual(result.accepted.first, values.first)
+        XCTAssertEqual(result.accepted.last, values[99])
+        XCTAssertEqual(result.duplicateCount, 1)
+        XCTAssertEqual(result.invalidCount, 1)
+        XCTAssertEqual(result.truncatedCount, 5)
+    }
+
+    func testDropImporterLoadsNSURLAndPlainTextFallbackInProviderOrder() async throws {
+        let urlProvider = NSItemProvider(object: NSURL(string: "https://example.com/url")!)
+        let fallbackProvider = NSItemProvider()
+        fallbackProvider.registerDataRepresentation(forTypeIdentifier: UTType.url.identifier, visibility: .all) { completion in
+            completion(nil, NSError(domain: "DropTest", code: 1))
+            return Progress()
+        }
+        fallbackProvider.registerDataRepresentation(forTypeIdentifier: UTType.plainText.identifier, visibility: .all) { completion in
+            completion(Data("https://example.com/text".utf8), nil)
+            return Progress()
+        }
+
+        let result = try await withCheckedThrowingContinuation { continuation in
+            _ = SourceURLDropImporter.start(providers: [urlProvider, fallbackProvider]) { result in
+                continuation.resume(returning: result)
+            }
+        }
+
+        XCTAssertEqual(result.accepted, ["https://example.com/url", "https://example.com/text"])
+        XCTAssertEqual(result.invalidCount, 0)
+    }
+
+    func testDroppedLinkAutomaticallySearchesAfterIdentityWithoutDownloading() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("needle-drop-search-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("needle-fixture")
+        let script = #"""
+        #!/bin/sh
+        case "$1" in
+        identify-url)
+          printf '%s\n' '{"ok":true,"artist":"A","title":"T","uncertain":true}'
+          ;;
+        search)
+          if [ "$8" != "https://example.com/source" ]; then exit 7; fi
+          printf '%s\n' '{"ok":true,"candidates":[{"candidate":{"provider":"test","id":"exact","url":"https://example.com/exact","title":"A - T"},"score":{"status":"recommended","positives":[],"warnings":[],"rejects":[]}}]}'
+          ;;
+        esac
+        """#
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        let defaults = isolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: defaultsSuite!) }
+        let history = HistoryStore(defaults: defaults)
+        let queue = ReviewQueue(defaults: defaults, history: history)
+        var settings = NeedleSettings(); settings.cliPath = executable.path
+        queue.add("https://example.com/manual", settings: settings)
+        try await wait { queue.items.first?.state == .needsInput }
+        XCTAssertNil(queue.items.first?.response, "Pasted links must still stop for identity review")
+
+        queue.add("https://example.com/source", settings: settings, automaticallySearchLinks: true)
+
+        try await wait { queue.items.last?.state == .ready }
+        XCTAssertEqual(queue.items.last?.artist, "A")
+        XCTAssertEqual(queue.items.last?.title, "T")
+        XCTAssertEqual(queue.items.last?.sourceIdentityUncertain, true)
+        XCTAssertEqual(queue.items.last?.response?.candidates.first?.candidate.url, "https://example.com/exact")
+        XCTAssertTrue(queue.items.last?.detail?.contains("source hints") == true)
+        XCTAssertTrue(history.tracks.isEmpty, "Automatic link search must never download or save audio")
     }
 
     func testRestartPreservesCandidatesButDoesNotAutoDownloadApprovedItems() throws {

@@ -2,6 +2,11 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.4.1
+
+- Drag source links onto any tab to find candidates automatically in Review Queue. Check the detected details, preview, and approve each recording before downloading.
+- Multiple dropped links are processed together, with clear feedback for duplicates and unsupported input.
+
 ## 0.3.0
 
 - Clickable in-app guides explain every tab, from choosing a source to repairing artwork and understanding Spotify delivery.

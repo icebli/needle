@@ -67,6 +67,7 @@ struct TabGuideView: View {
     ] }
 
     private var reviewQueueSections: [GuideSection] { [
+        GuideSection("Drop source links", "Drag a link from your browser onto any Needle tab. Needle opens Review Queue, reads the source details, and finds candidates automatically. Check the detected artist and title before approving; use Edit request to correct them. You can drop multiple links together; duplicates in the drop are skipped. Dropping a link does not approve a download."),
         GuideSection("Add a list", "Choose Paste a list and enter one source link or one Artist — Title per line. You can paste up to 100 lines. A link is only a starting hint: check the artist and title Needle displays before searching."),
         GuideSection("Review one item at a time", "Select an item on the left. Edit the artist, title, or source link when needed, then choose Find recordings. Review the same candidate details as Add Music: title, uploader, duration, bitrate, view count, warnings, and the full-track preview."),
         GuideSection("Approve and keep going", "Choose Approve & download only after listening and checking the candidate. You can select another queue item immediately; up to two approved downloads run at once in the background. Each download uses the exact candidate you approved."),

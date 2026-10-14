@@ -32,6 +32,9 @@ struct ReviewItem: Codable, Identifiable {
     var queueSpotify = false
     var trackID: UUID?
     var detail: String?
+    /// True when the provider could only suggest the identity from source
+    /// hints. Optional keeps older persisted queue entries decodable.
+    var sourceIdentityUncertain: Bool?
     var label: String { artist.isEmpty ? (title.isEmpty ? input : title) : "\(artist) — \(title)" }
 
     @MainActor static func parse(_ text: String, settings: NeedleSettings) -> [ReviewItem] {
@@ -65,6 +68,10 @@ final class ReviewQueue {
     private var searchService: NeedleCLIService?
     private var searchID: UUID?
     private var downloads: [UUID: NeedleCLIService] = [:]
+    /// Drop-originated URL items may continue from source identification into
+    /// candidate search. This is intentionally session-scoped; a relaunch
+    /// still requires the user to review an interrupted link.
+    private var automaticallySearchAfterIdentification = Set<UUID>()
     private let key = "needle.reviewQueue"
     var activeDownloads: Int { downloads.count }
     var selected: ReviewItem? { items.first { $0.id == selectedID } }
@@ -85,8 +92,11 @@ final class ReviewQueue {
         persist()
     }
 
-    func add(_ text: String, settings: NeedleSettings) {
+    func add(_ text: String, settings: NeedleSettings, automaticallySearchLinks: Bool = false) {
         let additions = ReviewItem.parse(text, settings: settings)
+        if automaticallySearchLinks {
+            automaticallySearchAfterIdentification.formUnion(additions.filter { !$0.sourceURL.isEmpty }.map(\.id))
+        }
         items.append(contentsOf: additions)
         if selectedID == nil { selectedID = additions.first?.id }
         searchNext()
@@ -152,10 +162,19 @@ final class ReviewQueue {
                 switch await service.identifyURL(item.sourceURL, settings: item.settings) {
                 case .success(let identity):
                     item.artist = identity.artist ?? ""; item.title = identity.title ?? ""
-                    // Source uploader names are hints. Require a human to check
-                    // identity before searching or approving a link-only entry.
-                    item.state = .needsInput
-                    item.detail = "Check the detected artist and title, then find recordings."
+                    item.sourceIdentityUncertain = identity.uncertain
+                    let shouldAutomaticallySearch = automaticallySearchAfterIdentification.remove(item.id) != nil
+                    if shouldAutomaticallySearch,
+                       !item.artist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       !item.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        item.state = .queued
+                        item.detail = "Finding recordings…"
+                    } else {
+                        // Pasted links and incomplete identities still require a
+                        // human check before Needle searches or approves them.
+                        item.state = .needsInput
+                        item.detail = "Check the detected artist and title, then find recordings."
+                    }
                     update(item)
                 case .failure(let error):
                     item.state = .needsInput; item.detail = error.localizedDescription; update(item)
@@ -165,7 +184,11 @@ final class ReviewQueue {
                 case .success(let response):
                     item.response = response
                     item.state = response.candidates.isEmpty ? .failed : .ready
-                    item.detail = response.candidates.isEmpty ? "No recordings found. Edit the request or try a source link." : nil
+                    item.detail = response.candidates.isEmpty
+                        ? "No recordings found. Edit the request or try a source link."
+                        : (item.sourceIdentityUncertain == true
+                           ? "Artist and title are source hints. Check them before approving; edit the request if needed."
+                           : nil)
                 case .failure(let error):
                     item.state = error is CancellationError ? .interrupted : .failed
                     item.detail = error.localizedDescription

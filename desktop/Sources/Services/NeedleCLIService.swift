@@ -68,6 +68,7 @@ actor NeedleCLIService {
         let ok: Bool
         let artist: String?
         let title: String?
+        let uncertain: Bool?
         let error: String?
     }
 

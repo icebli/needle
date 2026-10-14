@@ -21,7 +21,8 @@ scanner="${NEEDLE_GITLEAKS:-$(command -v gitleaks || true)}"
 scanner="$(cd "$(dirname "$scanner")" && pwd)/$(basename "$scanner")"
 stage="$(mktemp -d "${TMPDIR:-/tmp}/needle-distribution.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
-git clone --quiet "$github_url" "$stage/repo"
+# Audit the published main history and its reachable tags, not unrelated PR branches.
+git clone --quiet --single-branch --branch main "$github_url" "$stage/repo"
 python3 scripts/audit-distribution.py --history "$stage/repo"
 if [[ -n "$(git -C "$stage/repo" branch --show-current)" ]]; then
   git -C "$stage/repo" checkout -B main

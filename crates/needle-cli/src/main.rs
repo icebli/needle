@@ -223,10 +223,17 @@ fn cmd_identify_url(url: String, json: bool) -> Result<()> {
 fn identify_candidate(candidate: &needle_core::Candidate) -> (String, String, bool) {
     let uploader = candidate.uploader.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "Unknown artist".into());
     let title = candidate.title.trim().to_owned();
-    // yt-dlp often preserves the useful `Artist - Title` form. Only split when
-    // the prefix agrees with the uploader; otherwise keep the source title intact.
-    if let Some((prefix, rest)) = title.split_once(" - ") {
-        if prefix.eq_ignore_ascii_case(&uploader) { return (uploader, rest.trim().to_owned(), false); }
+    // Uploaders may be remixers or channels rather than the recording artist.
+    // Use a conventional title prefix as a hint, retaining uncertainty whenever
+    // it disagrees with the uploader so approval never implies verified tags.
+    for separator in [" - ", " — ", " – "] {
+        if let Some((prefix, rest)) = title.split_once(separator) {
+            let artist = prefix.trim();
+            let song = rest.trim();
+            if !artist.is_empty() && !song.is_empty() {
+                return (artist.to_owned(), song.to_owned(), !artist.eq_ignore_ascii_case(uploader.trim()));
+            }
+        }
     }
     (uploader, title, true)
 }
@@ -1422,6 +1429,17 @@ mod tests {
             audio_bitrate_kbps: None, query_origin: "canonical".into(),
         };
         assert_eq!(identify_candidate(&candidate).2, true);
+    }
+
+    #[test]
+    fn identify_url_uses_artist_prefix_when_the_remixer_uploaded_it() {
+        let candidate = needle_core::Candidate {
+            provider: "soundcloud".into(), id: "1".into(), url: "https://soundcloud.test/1".into(),
+            title: "Doechii - Nissan Altima (Whethan Remix)".into(), uploader: Some("Whethan".into()),
+            duration_ms: None, thumbnail_url: None, view_count: None, audio_codec: None,
+            audio_bitrate_kbps: None, query_origin: "canonical".into(),
+        };
+        assert_eq!(identify_candidate(&candidate), ("Doechii".into(), "Nissan Altima (Whethan Remix)".into(), true));
     }
 
     #[test]

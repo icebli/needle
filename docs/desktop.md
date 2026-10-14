@@ -6,7 +6,9 @@ Needle is a macOS companion for bringing recordings into your Spotify local-file
 
 Follow [Getting started](GETTING_STARTED.md) to install Needle. In **Add Music**, enter an artist and title or paste a source link, then choose **Find recordings**. Compare the results, preview a candidate, and choose **Save recording** when it matches what you want.
 
-**Review Queue** accepts one link or `Artist — Title` per line, persists your review progress, and runs up to two approved downloads in the background. Each recording requires explicit source approval.
+Drag a source link from your browser onto any tab to add it to **Review Queue**. Needle finds candidates automatically. Check the detected artist and title, then preview and approve the recording. Use **Edit request** to correct source hints. Multiple dropped links join the queue together; downloads still require approval.
+
+**Review Queue** also accepts one link or `Artist — Title` per line, persists your review progress, and runs up to two approved downloads in the background. Each recording requires explicit source approval.
 
 **Library → Repair** edits embedded tags and artwork in place, with a backup before each change. Metadata and original-source artwork are suggestions you approve. See [Getting started](GETTING_STARTED.md#repair-a-saved-recording).
 
