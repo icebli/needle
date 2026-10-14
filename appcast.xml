@@ -3,6 +3,15 @@
     <channel>
         <title>Needle</title>
         <item>
+            <title>0.7.0</title>
+            <pubDate>Tue, 13 Oct 2026 22:03:51 -0700</pubDate>
+            <sparkle:version>7000</sparkle:version>
+            <sparkle:shortVersionString>0.7.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/icebli/needle/releases/download/v0.7.0/Needle-0.7.0.dmg" length="106924685" type="application/octet-stream" sparkle:edSignature="jmDQCm7uA5AItmXoNCom9Z/9lxLaZ2dDvLWrggsckkoarcqgMUhpra/9eMT08BiUWRWPY0voZ+jtEODKOTJ6Dg=="/>
+        </item>
+        <item>
             <title>0.5.0</title>
             <pubDate>Tue, 13 Oct 2026 21:07:29 -0700</pubDate>
             <sparkle:version>5000</sparkle:version>
@@ -21,24 +30,6 @@
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description><![CDATA[<h2>Needle 0.4.1</h2><ul><li>Drop source links onto any tab to add them to Review Queue and find candidates automatically.</li><li>Preview the recording and check detected artist/title before approving the download.</li><li>Drop multiple links together, with duplicate filtering and clear feedback.</li></ul><p>This release is unsigned and not notarized. macOS may require Privacy &amp; Security → Open Anyway.</p>]]></description>
             <enclosure url="https://github.com/icebli/needle/releases/download/v0.4.1/Needle-0.4.1.dmg" length="107262438" type="application/octet-stream" sparkle:edSignature="FcHYdU/tgs84QzufPSzEOnAliA9BdFPs1bHP0gZO1KjfuoA6SY3lqHlFQOb7RMt4J6DE+aJV7xolm8oqBrJECw=="/>
-        </item>
-        <item>
-            <title>0.3.0</title>
-            <pubDate>Tue, 13 Oct 2026 20:12:36 -0700</pubDate>
-            <sparkle:version>3000</sparkle:version>
-            <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[<h2>Needle 0.3.0</h2>
-<ul>
-<li><strong>Review Queue:</strong> paste lists, approve each recording, and keep reviewing while downloads continue.</li>
-<li><strong>Smarter previews:</strong> full-track scrubbing, intro skipping, and timestamp comparison between candidates.</li>
-<li><strong>Library Repair:</strong> fix tags and embed artwork without downloading again, with original-file backups.</li>
-<li><strong>Guides in every tab:</strong> click ? for instructions and troubleshooting.</li>
-</ul>
-<p>This app is unsigned. macOS may require Privacy &amp; Security → Open Anyway after updating. Your music and settings stay on your computer.</p>
-<p><a href="https://github.com/icebli/needle/releases/tag/v0.3.0">Full release notes and installation instructions</a></p>]]></description>
-            <enclosure url="https://github.com/icebli/needle/releases/download/v0.3.0/Needle-0.3.0.dmg" length="106526482" type="application/octet-stream" sparkle:edSignature="tnsouZwGCgf+wnzpRsdsb4zCqI0wCkmg/pPkjBBLvuXa0mnoujuF3VNEOiFsSBBAhqStPtB94V01xiqwYaNkBw=="/>
         </item>
     </channel>
 </rss>
