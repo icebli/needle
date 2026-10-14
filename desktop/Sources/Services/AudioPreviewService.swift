@@ -21,7 +21,8 @@ final class AudioPreviewService: NSObject, ObservableObject {
     @Published private(set) var state: AudioPreviewState = .idle
     @Published private(set) var candidateID: String?
     @Published private(set) var elapsed: Double = 0
-    @Published private(set) var duration: Double = 30
+    @Published private(set) var duration: Double = 0
+    @Published var keepTimestampAcrossCandidates = true
 
     private var player: AVPlayer?
     private var itemObservation: NSKeyValueObservation?
@@ -30,6 +31,9 @@ final class AudioPreviewService: NSObject, ObservableObject {
     private var processToken: UUID?
     private var preparationTask: Task<Void, Never>?
     private var temporaryDirectory: URL?
+    private var pendingSeek: Double?
+    private var positions: [String: Double] = [:]
+    private var sharedTimestamp: Double?
     private var generation = UUID()
     private var endObserver: NSObjectProtocol?
     private var terminateObserver: NSObjectProtocol?
@@ -48,6 +52,13 @@ final class AudioPreviewService: NSObject, ObservableObject {
     var isPlaying: Bool { state == .playing }
 
     func start(candidate: CandidateResult) {
+        rememberPosition()
+        let requestedPosition: Double?
+        if keepTimestampAcrossCandidates, let sharedTimestamp {
+            requestedPosition = sharedTimestamp
+        } else {
+            requestedPosition = positions[candidate.id]
+        }
         stop()
         guard let source = AppModel.mediaURL(candidate.candidate.url) else {
             candidateID = candidate.id
@@ -59,7 +70,8 @@ final class AudioPreviewService: NSObject, ObservableObject {
         generation = token
         candidateID = candidate.id
         elapsed = 0
-        duration = 30
+        duration = 0
+        pendingSeek = requestedPosition
         state = .preparing
         preparationTask = Task { [weak self] in
             guard let self else { return }
@@ -107,9 +119,19 @@ final class AudioPreviewService: NSObject, ObservableObject {
         let clamped = min(max(value, 0), max(duration, 0))
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600))
         elapsed = clamped
+        rememberPosition()
+    }
+
+    func seek(by offset: Double) {
+        seek(to: elapsed + offset)
+    }
+
+    func skipIntro() {
+        seek(by: 30)
     }
 
     func stop() {
+        rememberPosition()
         let wasPreparing = preparationTask != nil && state == .preparing
         generation = UUID()
         preparationTask?.cancel()
@@ -125,38 +147,53 @@ final class AudioPreviewService: NSObject, ObservableObject {
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         player = nil
-        if !wasPreparing { cleanupTemporaryFiles() }
+        if wasPreparing { cleanupIncompletePreview() }
         candidateID = nil
         elapsed = 0
-        duration = 30
+        duration = 0
+        pendingSeek = nil
         state = .idle
     }
 
     nonisolated static func previewArguments(sourceURL: String, outputTemplate: String) -> [String] {
-        ["--ignore-config", "--no-playlist", "--extractor-args", "youtube:player_client=android", "--download-sections", "*0-30", "-f",
+        ["--ignore-config", "--no-playlist", "--extractor-args", "youtube:player_client=android", "-f",
          "bestaudio[ext=m4a]/bestaudio", "-x", "--audio-format", "mp3",
          "--audio-quality", "5", "-o", outputTemplate, sourceURL]
     }
 
     private func prepare(source: URL, token: UUID) async throws -> URL {
+        let cacheDirectory = Self.previewCacheDirectory(for: candidateID ?? token.uuidString,
+                                                        sourceURL: source.absoluteString)
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("needle-preview-\(token.uuidString)", isDirectory: true)
+            .appendingPathComponent("needle-preview-work-\(token.uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        var retainDirectory = false
+        temporaryDirectory = directory
         defer {
-            if !retainDirectory { try? FileManager.default.removeItem(at: directory) }
+            try? FileManager.default.removeItem(at: directory)
         }
         let template = directory.appendingPathComponent("excerpt.%(ext)s").path
+        let cachedOutput = cacheDirectory.appendingPathComponent("excerpt.mp3")
+        let cacheMarker = cacheDirectory.appendingPathComponent("complete")
+        if FileManager.default.fileExists(atPath: cachedOutput.path),
+           FileManager.default.fileExists(atPath: cacheMarker.path) {
+            Self.touch(cacheDirectory)
+            Self.trimCache(keeping: cacheDirectory)
+            temporaryDirectory = nil
+            return cachedOutput
+        }
+        let output = directory.appendingPathComponent("excerpt.mp3")
         let executable = try ytDLPOverride ?? Self.findExecutable(named: "yt-dlp")
         let result = try await run(executable: executable,
                                    arguments: Self.previewArguments(sourceURL: source.absoluteString, outputTemplate: template),
                                    token: token)
-        let output = directory.appendingPathComponent("excerpt.mp3")
         if result.status == 0, FileManager.default.fileExists(atPath: output.path) {
             guard generation == token else { throw CancellationError() }
-            temporaryDirectory = directory
-            retainDirectory = true
-            return output
+            guard let committed = Self.commitPreview(output, to: cacheDirectory) else {
+                throw PreviewError.message("Needle could not cache this preview.")
+            }
+            temporaryDirectory = nil
+            Self.trimCache(keeping: cacheDirectory)
+            return committed
         }
 
         // Some YouTube sessions return a media URL that ffmpeg cannot open
@@ -176,16 +213,19 @@ final class AudioPreviewService: NSObject, ObservableObject {
         let ffmpeg = try Self.findExecutable(named: "ffmpeg")
         let trimResult = try await run(executable: ffmpeg,
                                        arguments: ["-hide_banner", "-loglevel", "error", "-y", "-i", downloaded.path,
-                                                   "-t", "30", "-vn", "-acodec", "libmp3lame", "-q:a", "5", output.path],
+                                                   "-vn", "-acodec", "libmp3lame", "-q:a", "5", output.path],
                                        token: token)
         guard trimResult.status == 0, FileManager.default.fileExists(atPath: output.path) else {
             let detail = String(decoding: trimResult.error, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             throw PreviewError.message(detail.isEmpty ? "The preview converter did not produce an audio file." : detail)
         }
         guard generation == token else { throw CancellationError() }
-        temporaryDirectory = directory
-        retainDirectory = true
-        return output
+        guard let committed = Self.commitPreview(output, to: cacheDirectory) else {
+            throw PreviewError.message("Needle could not cache this preview.")
+        }
+        temporaryDirectory = nil
+        Self.trimCache(keeping: cacheDirectory)
+        return committed
     }
 
     private func installPlayer(_ url: URL, token: UUID) {
@@ -203,7 +243,15 @@ final class AudioPreviewService: NSObject, ObservableObject {
                         guard self.generation == token else { return }
                         if let seconds = try? await item.asset.load(.duration), seconds.seconds.isFinite, seconds.seconds > 0 {
                             guard self.generation == token else { return }
-                            self.duration = min(seconds.seconds, 30)
+                            self.duration = seconds.seconds
+                            if let pending = self.pendingSeek {
+                                let initial = min(max(pending, 0), self.duration)
+                                if initial > 0 {
+                                    await player.seek(to: CMTime(seconds: initial, preferredTimescale: 600))
+                                    self.elapsed = initial
+                                }
+                                self.pendingSeek = nil
+                            }
                         }
                         guard self.generation == token else { return }
                         self.state = .ready
@@ -220,7 +268,8 @@ final class AudioPreviewService: NSObject, ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, self.generation == token else { return }
                 self.elapsed = min(max(time.seconds.isFinite ? time.seconds : 0, 0), self.duration)
-                if self.elapsed >= self.duration - 0.05 {
+                self.rememberPosition()
+                if self.duration > 0, self.elapsed >= self.duration - 0.05 {
                     player.pause()
                     self.state = .paused
                 }
@@ -305,11 +354,26 @@ final class AudioPreviewService: NSObject, ObservableObject {
         state = .idle
     }
 
+    private func rememberPosition() {
+        guard let candidateID,
+              [.ready, .playing, .paused].contains(state),
+              elapsed.isFinite else { return }
+        positions[candidateID] = min(max(elapsed, 0), max(duration, 0))
+        if keepTimestampAcrossCandidates { sharedTimestamp = positions[candidateID] }
+    }
+
     private func terminateProcess(token: UUID? = nil) {
         guard let process else { return }
         guard token == nil || processToken == token else { return }
-        for pid in Self.descendants(of: process.processIdentifier).reversed() { kill(pid, SIGTERM) }
+        let descendants = Self.descendants(of: process.processIdentifier).compactMap(Self.processIdentity)
+        for identity in descendants.reversed() { kill(identity.pid, SIGTERM) }
         if process.isRunning { process.terminate() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            for identity in descendants where Self.matchesCurrentProcess(identity) {
+                kill(identity.pid, SIGKILL)
+            }
+        }
         self.process = nil
         processToken = nil
     }
@@ -319,6 +383,65 @@ final class AudioPreviewService: NSObject, ObservableObject {
             try? FileManager.default.removeItem(at: temporaryDirectory)
         }
         temporaryDirectory = nil
+    }
+
+    private func cleanupIncompletePreview() {
+        guard let directory = temporaryDirectory,
+              !FileManager.default.fileExists(atPath: directory.appendingPathComponent("excerpt.mp3").path) else { return }
+        try? FileManager.default.removeItem(at: directory)
+        temporaryDirectory = nil
+    }
+
+    nonisolated static func previewCacheDirectory(for candidateID: String, sourceURL: String = "") -> URL {
+        var hash: UInt64 = 14695981039346656037
+        for byte in (candidateID + "\n" + sourceURL).utf8 { hash = (hash ^ UInt64(byte)) &* 1099511628211 }
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("needle-preview-cache", isDirectory: true)
+            .appendingPathComponent(String(format: "%016llx", hash), isDirectory: true)
+    }
+
+    private nonisolated static func trimCache(keeping current: URL) {
+        let root = current.deletingLastPathComponent()
+        guard let directories = try? FileManager.default.contentsOfDirectory(at: root,
+                                                                                includingPropertiesForKeys: [.contentModificationDateKey],
+                                                                                options: .skipsHiddenFiles) else { return }
+        for directory in directories where directory != current &&
+                !FileManager.default.fileExists(atPath: directory.appendingPathComponent("complete").path) {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let complete = directories.filter {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("excerpt.mp3").path) &&
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("complete").path)
+        }
+        let ordered = complete.sorted {
+            let lhs = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let rhs = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return lhs > rhs
+        }
+        for directory in ordered.dropFirst(3) where directory != current {
+            try? FileManager.default.removeItem(at: directory)
+        }
+    }
+
+    private nonisolated static func touch(_ directory: URL) {
+        try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: directory.path)
+    }
+
+    private nonisolated static func commitPreview(_ output: URL, to directory: URL) -> URL? {
+        let fileManager = FileManager.default
+        let marker = directory.appendingPathComponent("complete")
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            let destination = directory.appendingPathComponent("excerpt.mp3")
+            if fileManager.fileExists(atPath: destination.path) { try fileManager.removeItem(at: destination) }
+            try fileManager.moveItem(at: output, to: destination)
+            try Data("complete\n".utf8).write(to: marker, options: .atomic)
+            touch(directory)
+            return destination
+        } catch {
+            try? fileManager.removeItem(at: marker)
+            return nil
+        }
     }
 
     private static func findExecutable(named name: String) throws -> String {
@@ -333,7 +456,7 @@ final class AudioPreviewService: NSObject, ObservableObject {
         throw PreviewError.message("yt-dlp was not found. Check Needle’s tool setup before previewing.")
     }
 
-    private static func descendants(of parent: Int32) -> [Int32] {
+    private nonisolated static func descendants(of parent: Int32) -> [Int32] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/ps")
         process.arguments = ["-axo", "pid=,ppid="]
@@ -356,6 +479,28 @@ final class AudioPreviewService: NSObject, ObservableObject {
             }
         }
         return result
+    }
+
+    private struct ProcessIdentity: Sendable {
+        let pid: Int32
+        let start: String
+    }
+
+    private nonisolated static func processIdentity(_ pid: Int32) -> ProcessIdentity? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", String(pid), "-o", "pid=,lstart="]
+        let pipe = Pipe(); process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+        let fields = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isWhitespace)
+        guard fields.count >= 6, let parsed = Int32(fields[0]) else { return nil }
+        return ProcessIdentity(pid: parsed, start: fields.dropFirst().joined(separator: " "))
+    }
+
+    private nonisolated static func matchesCurrentProcess(_ identity: ProcessIdentity) -> Bool {
+        guard let current = processIdentity(identity.pid) else { return false }
+        return current.pid == identity.pid && current.start == identity.start
     }
 }
 

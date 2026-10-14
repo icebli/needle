@@ -3,6 +3,7 @@ use anyhow::{Result, bail};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Duration;
+use std::path::PathBuf;
 use strsim::jaro_winkler;
 
 #[derive(Parser)]
@@ -84,6 +85,47 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect tags and embedded artwork in an existing audio file
+    Inspect {
+        path: PathBuf,
+        #[arg(long)]
+        artwork_dir: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Repair tags and/or embedded artwork in place without downloading audio
+    Repair {
+        path: PathBuf,
+        #[arg(long)]
+        artist: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        album: Option<String>,
+        #[arg(long)]
+        clear_album: bool,
+        #[arg(long)]
+        album_artist: Option<String>,
+        #[arg(long, alias = "artwork-file")]
+        artwork: Option<PathBuf>,
+        /// Download artwork from this explicitly approved URL (max 10 MiB)
+        #[arg(long)]
+        artwork_url: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resolve authoritative metadata suggestions for an existing recording
+    RepairSuggestions {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resolve a source URL into editable artist/title fields without searching or downloading
+    IdentifyUrl {
+        url: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -103,7 +145,90 @@ async fn main() -> Result<()> {
             cmd_search(artist, title, album, url, no_metadata, duration_override, source, json).await
         }
         Commands::Doctor { json } => cmd_doctor(json).await,
+        Commands::Inspect { path, artwork_dir, json } => cmd_inspect(path, artwork_dir, json),
+        Commands::Repair { path, artist, title, album, clear_album, album_artist, artwork, artwork_url, json } => {
+            cmd_repair(path, artist, title, album, clear_album, album_artist, artwork, artwork_url, json).await
+        }
+        Commands::RepairSuggestions { path, json } => cmd_repair_suggestions(path, json).await,
+        Commands::IdentifyUrl { url, json } => cmd_identify_url(url, json),
     }
+}
+
+fn cmd_inspect(path: PathBuf, artwork_dir: Option<PathBuf>, json: bool) -> Result<()> {
+    let inspected = needle_core::tag::inspect_tags(&path, artwork_dir.as_deref())?;
+    if json { println!("{}", serde_json::to_string(&serde_json::json!({"ok": true, "track": inspected}))?); }
+    else {
+        println!("{}", path.display());
+        println!("  {} — {}", inspected.artist.as_deref().unwrap_or("Unknown artist"), inspected.title.as_deref().unwrap_or("Unknown title"));
+        println!("  Album: {}", inspected.album.as_deref().unwrap_or("(none)"));
+        println!("  Artwork: {}", inspected.artwork.len());
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_repair(path: PathBuf, artist: Option<String>, title: Option<String>, album: Option<String>, clear_album: bool, album_artist: Option<String>, artwork: Option<PathBuf>, artwork_url: Option<String>, json: bool) -> Result<()> {
+    if album.is_some() && clear_album { bail!("use either --album or --clear-album, not both"); }
+    if artwork_url.is_some() && artwork.is_some() { bail!("use either --artwork or --artwork-url, not both"); }
+    let mut artwork_data = artwork.map(|p| -> Result<Vec<u8>> { Ok(std::fs::read(p)?) }).transpose()?;
+    let mut artwork_mime = None;
+    if let Some(url) = artwork_url {
+        if !url.starts_with("https://") && !url.starts_with("http://") { bail!("artwork URL must use HTTP(S)"); }
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+        let response = client.get(&url).send().await?.error_for_status()?;
+        if response.content_length().is_some_and(|length| length > 10 * 1024 * 1024) { bail!("artwork exceeds 10 MiB limit"); }
+        let content_type = response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_owned);
+        artwork_mime = None;
+        if content_type.as_deref().is_some_and(|mime| !mime.to_ascii_lowercase().starts_with("image/")) { bail!("artwork URL did not return an image"); }
+        let mut bytes = Vec::new();
+        let mut response = response;
+        while let Some(chunk) = response.chunk().await? {
+            if bytes.len().saturating_add(chunk.len()) > 10 * 1024 * 1024 { bail!("artwork exceeds 10 MiB limit"); }
+            bytes.extend_from_slice(&chunk);
+        }
+        artwork_data = Some(bytes);
+    }
+    if artist.is_none() && title.is_none() && album.is_none() && !clear_album && album_artist.is_none() && artwork_data.is_none() {
+        bail!("provide at least one field to repair");
+    }
+    let updated = needle_core::tag::repair_tags_with_backup(&path, &needle_core::tag::TagRepair { artist, title, album, clear_album, album_artist, artwork: artwork_data, artwork_mime })?;
+    if json { println!("{}", serde_json::to_string(&serde_json::json!({"ok": true, "track": updated.track, "backup_path": updated.backup_path}))?); }
+    else { println!("Repaired {}", path.display()); }
+    Ok(())
+}
+
+async fn cmd_repair_suggestions(path: PathBuf, json: bool) -> Result<()> {
+    let current = needle_core::tag::inspect_tags(&path, None)?;
+    let artist = current.artist.as_deref().ok_or_else(|| anyhow::anyhow!("file has no artist tag"))?;
+    let title = current.title.as_deref().ok_or_else(|| anyhow::anyhow!("file has no title tag"))?;
+    let metadata = needle_core::metadata::resolve_metadata(artist, title).await?.ok_or_else(|| anyhow::anyhow!("no authoritative metadata found"))?;
+    let warning = metadata_variant_warning(title, &metadata.title);
+    let response = serde_json::json!({"ok": true, "path": path, "current": current, "suggestion": metadata, "warning": warning});
+    if json { println!("{}", response); } else { println!("Suggested: {} — {}", metadata.artist, metadata.title); }
+    Ok(())
+}
+
+fn cmd_identify_url(url: String, json: bool) -> Result<()> {
+    if !url.starts_with("https://") && !url.starts_with("http://") { bail!("source URL must use HTTP(S)"); }
+    let toolchain = needle_core::Toolchain::discover()?;
+    let candidate = needle_core::search::resolve_url(toolchain.yt_dlp_path.to_str().unwrap(), &url)?
+        .ok_or_else(|| anyhow::anyhow!("source URL could not be resolved"))?;
+    let (artist, title, uncertain) = identify_candidate(&candidate);
+    let response = serde_json::json!({"ok": true, "artist": artist, "title": title, "source_url": candidate.url, "uncertain": uncertain});
+    if json { println!("{}", response); }
+    else { println!("{} — {}", response["artist"].as_str().unwrap_or("Unknown artist"), response["title"].as_str().unwrap_or("Unknown title")); }
+    Ok(())
+}
+
+fn identify_candidate(candidate: &needle_core::Candidate) -> (String, String, bool) {
+    let uploader = candidate.uploader.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "Unknown artist".into());
+    let title = candidate.title.trim().to_owned();
+    // yt-dlp often preserves the useful `Artist - Title` form. Only split when
+    // the prefix agrees with the uploader; otherwise keep the source title intact.
+    if let Some((prefix, rest)) = title.split_once(" - ") {
+        if prefix.eq_ignore_ascii_case(&uploader) { return (uploader, rest.trim().to_owned(), false); }
+    }
+    (uploader, title, true)
 }
 
 async fn cmd_get(
@@ -819,6 +944,12 @@ fn requested_variant_conflicts_with_metadata(request_title: &str, metadata_title
             != normalize_for_metadata_match(metadata_title)
 }
 
+fn metadata_variant_warning(request_title: &str, metadata_title: &str) -> Option<&'static str> {
+    requested_variant_conflicts_with_metadata(request_title, metadata_title).then_some(
+        "This suggestion appears to describe the original release, not the current remix or variant. Review the title and album before applying it.",
+    )
+}
+
 fn has_mix_variant(value: &str) -> bool {
     normalize_for_metadata_match(value)
         .split_whitespace()
@@ -1272,6 +1403,28 @@ mod tests {
     }
 
     #[test]
+    fn identify_url_only_splits_a_title_when_uploader_agrees() {
+        let candidate = needle_core::Candidate {
+            provider: "soundcloud".into(), id: "1".into(), url: "https://soundcloud.test/1".into(),
+            title: "Whethan - Nissan Altima (Whethan Remix)".into(), uploader: Some("Whethan".into()),
+            duration_ms: None, thumbnail_url: None, view_count: None, audio_codec: None,
+            audio_bitrate_kbps: None, query_origin: "canonical".into(),
+        };
+        assert_eq!(identify_candidate(&candidate), ("Whethan".into(), "Nissan Altima (Whethan Remix)".into(), false));
+    }
+
+    #[test]
+    fn identify_url_marks_untrusted_title_shape_uncertain() {
+        let candidate = needle_core::Candidate {
+            provider: "soundcloud".into(), id: "1".into(), url: "https://soundcloud.test/1".into(),
+            title: "Nissan Altima (Whethan Remix)".into(), uploader: Some("Whethan".into()),
+            duration_ms: None, thumbnail_url: None, view_count: None, audio_codec: None,
+            audio_bitrate_kbps: None, query_origin: "canonical".into(),
+        };
+        assert_eq!(identify_candidate(&candidate).2, true);
+    }
+
+    #[test]
     fn search_json_response_preserves_candidate_url_and_shape() {
         let req = needle_core::ParsedRequest {
             artist: "Artist".into(),
@@ -1518,6 +1671,14 @@ esac
         assert_eq!(tagged.track_number, None);
         assert_eq!(tagged.disc_number, None);
         assert_eq!(tagged.release_date, None);
+    }
+
+    #[test]
+    fn repair_suggestion_warns_when_metadata_drops_variant_marker() {
+        let warning = metadata_variant_warning("Nissan Altima (Whethan Remix)", "Nissan Altima");
+        assert!(warning.is_some());
+        assert!(warning.unwrap().contains("original release"));
+        assert!(metadata_variant_warning("Nissan Altima", "Nissan Altima").is_none());
     }
 
     #[test]

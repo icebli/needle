@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Darwin
 import XCTest
 @testable import NeedleDesktop
@@ -104,6 +105,18 @@ printf '%s\n' '{"ok":false,"tools":[{"name":"ffmpeg","ok":false,"optional":false
         XCTAssertEqual(response.tools.first?.ok, false)
     }
 
+    func testRepairCommandsReserveJSONForStructuredOutput() async throws {
+        let fixture = try CLIFixture(script: #"""
+#!/bin/bash
+set -eu
+printf '%s\n' "$@" > "$NEEDLE_TEST_ARGS"
+printf '%s\n' '{"ok":true,"track":{"path":"/tmp/song.mp3","artist":"A","title":"T","album":null,"artwork":[]}}'
+"""#)
+        var settings = NeedleSettings(); settings.cliPath = fixture.path
+        _ = try await NeedleCLIService().runJSONCommand(["inspect", "/tmp/song.mp3", "--artwork-dir", "/tmp/art", "--json"], settings: settings)
+        XCTAssertEqual(try fixture.arguments(), ["inspect", "/tmp/song.mp3", "--artwork-dir", "/tmp/art", "--json"])
+    }
+
     func testCancelTerminatesLongRunningChildProcess() async throws {
         let fixture = try CLIFixture(script: #"""
 #!/bin/bash
@@ -119,6 +132,46 @@ wait "$child"
         let task = Task { await service.search(artist: "A", title: "T", settings: settings) }
         try await waitUntil { FileManager.default.fileExists(atPath: fixture.childPath) }
         await service.cancel()
+        _ = await task.value
+        let childPID = Int32(try String(contentsOfFile: fixture.childPath).trimmingCharacters(in: .whitespacesAndNewlines))!
+        try await waitUntil(timeout: 5) { kill(childPID, 0) != 0 }
+    }
+
+    func testCancelEscalatesWhenCLIRootAndChildIgnoreSIGTERM() async throws {
+        let fixture = try CLIFixture(script: #"""
+#!/bin/bash
+set -eu
+trap '' TERM
+sleep 30 &
+child=$!
+echo "$child" > "$NEEDLE_TEST_CHILD"
+wait "$child"
+"""#)
+        var settings = NeedleSettings(); settings.cliPath = fixture.path
+        let service = NeedleCLIService()
+        let task = Task { await service.search(artist: "A", title: "T", settings: settings) }
+        try await waitUntil { FileManager.default.fileExists(atPath: fixture.childPath) }
+        await service.cancel()
+        _ = await task.value
+        let childPID = Int32(try String(contentsOfFile: fixture.childPath).trimmingCharacters(in: .whitespacesAndNewlines))!
+        try await waitUntil(timeout: 4) { kill(childPID, 0) != 0 }
+    }
+
+    func testQuittingAppStopsLongRunningChildProcess() async throws {
+        let fixture = try CLIFixture(script: #"""
+#!/bin/bash
+set -eu
+sleep 30 &
+child=$!
+echo "$child" > "$NEEDLE_TEST_CHILD"
+wait "$child"
+"""#
+        )
+        var settings = NeedleSettings(); settings.cliPath = fixture.path
+        let service = NeedleCLIService()
+        let task = Task { await service.search(artist: "A", title: "T", settings: settings) }
+        try await waitUntil { FileManager.default.fileExists(atPath: fixture.childPath) }
+        NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
         _ = await task.value
         let childPID = Int32(try String(contentsOfFile: fixture.childPath).trimmingCharacters(in: .whitespacesAndNewlines))!
         try await waitUntil(timeout: 5) { kill(childPID, 0) != 0 }

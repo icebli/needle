@@ -10,7 +10,7 @@ Needle supports **Apple Silicon Macs (M1 or newer) running macOS 15 Sequoia or l
 2. Choose the latest release and download its `.dmg` file from **Assets**. You do not need the “Source code” downloads.
 3. Open the downloaded disk image and drag **Needle** onto **Applications**.
 4. Open **Applications → Needle**, then eject the disk image.
-5. If macOS says it cannot verify the developer, click **Done**, then open **System Settings → Privacy & Security**. Scroll to the Security section, click **Open Anyway** for Needle, and confirm **Open** in the second dialog. This approval is needed because the preview is unsigned. macOS may ask again after a later manually downloaded build.
+5. If macOS says it cannot verify the developer, click **Done**, then open **System Settings → Privacy & Security**. Scroll to the Security section, click **Open Anyway** for Needle, and confirm **Open** in the second dialog. This approval is needed because the app is unsigned. macOS may ask again after a later manually downloaded build.
 
 **Unsigned app:** this build does not have Apple's Developer ID identity or notarization ticket. Check the exact release notes for the supported Apple Silicon and macOS versions. Never disable Gatekeeper, run commands that remove quarantine, or install a build from an untrusted mirror.
 
@@ -21,12 +21,26 @@ The Mac installer includes its audio tools. You do not need Rust, Xcode, Homebre
 1. In **Add Music**, enter the artist and song title. Use the optional album hint or source link when needed.
 2. Choose **Find recordings**.
 3. Review the source title, duration, views, and source bitrate. **Unknown** means the provider did not report a value. **Check source quality** can retrieve missing bitrate information.
-4. Use **Preview** to listen to an excerpt inside Needle. Previewing does not save the track to your collection.
+4. Use **Preview** to listen inside Needle and scrub through the recording. Previewing does not save the track to your collection.
 5. If you have not installed the optional Needle Spotify companion, turn off **Add to Needle in Spotify after saving** (the name changes with your chosen playlist) and choose **Save recording**. This checkbox starts enabled; turning it off avoids waiting for a companion you have not installed. If you use automatic playlist delivery, check the playlist name before saving.
 
 **Activity** shows download progress and Spotify delivery separately. **Library** contains your saved recordings and can reveal them in Finder. The default music folder is `~/Music/needle` — the `needle` folder inside your home folder's **Music** folder.
 
 A high bitrate does not prove a recording is the right version. Needle shows identity warnings, and converting audio cannot restore quality missing from the source.
+
+## Review several recordings
+
+Open **Review Queue**, paste one source link or `Artist — Title` per line, and choose **Add to queue**. Link-only entries ask you to check the artist and title. Review the candidates for each entry, listen, then choose **Approve & download**. Up to two approved recordings download in the background while you review the next one. Spotify delivery is optional and starts off in the queue.
+
+The queue survives restarting Needle. Interrupted work needs your review before downloading again. **Clear finished** removes queue entries, keeping saved music files.
+
+Preview controls include a full-track scrubber, ten-second jumps, and **Skip intro**. Enable **Keep position when switching sources** to compare recordings at the same timestamp. Preparing a preview can take time because Needle fetches the full audio into a temporary cache.
+
+## Repair a saved recording
+
+In **Library**, choose **Repair**. Needle reads the file's actual tags and embedded artwork. Edit artist, title, or album; use **Remove album** to clear it explicitly. You can choose an image, find artwork from the original source, or request metadata suggestions. Preview suggestions before applying them, especially for remixes and live recordings.
+
+**Apply changes** updates the existing file without downloading or converting its audio. Needle creates a backup first and offers **Reveal backup** after saving. Spotify may need to refresh Local Files to display updated tags or artwork. Use **Add to Spotify** on the saved recording to retry delivery without downloading again.
 
 ## Listen in Spotify
 

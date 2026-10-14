@@ -2,6 +2,15 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.3.0
+
+- Clickable in-app guides explain every tab, from choosing a source to repairing artwork and understanding Spotify delivery.
+
+- Persistent review queue for multiple source links or artist/title lines, with explicit approval and background downloads.
+- Full-track previews with scrubbing, intro skipping, and timestamp comparison between candidates.
+- Library artwork and metadata repair without downloading again, with original-file backups and reviewed suggestions.
+- More readable candidate cards and independent download workers.
+
 ## 0.2.8
 
 - Updated record-player logo and sharper app icon.

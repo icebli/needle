@@ -47,9 +47,9 @@ final class NeedleDesktopTests: XCTestCase {
         let response = try NeedleCLIService.parseLastJSON(SearchResponse.self, data: data)
         XCTAssertEqual(response.candidates.first?.candidate.thumbnailURL, "https://i.ytimg.com/vi/abc123/hqdefault.jpg")
     }
-    func testPreviewUsesExactSourceAndThirtySecondAudioExcerpt() {
+    func testPreviewUsesExactSourceAndDownloadsFullTrack() {
         let args = AudioPreviewService.previewArguments(sourceURL: "https://example.com/watch?v=abc", outputTemplate: "/tmp/excerpt.%(ext)s")
-        XCTAssertEqual(args, ["--ignore-config", "--no-playlist", "--extractor-args", "youtube:player_client=android", "--download-sections", "*0-30", "-f", "bestaudio[ext=m4a]/bestaudio", "-x", "--audio-format", "mp3", "--audio-quality", "5", "-o", "/tmp/excerpt.%(ext)s", "https://example.com/watch?v=abc"])
+        XCTAssertEqual(args, ["--ignore-config", "--no-playlist", "--extractor-args", "youtube:player_client=android", "-f", "bestaudio[ext=m4a]/bestaudio", "-x", "--audio-format", "mp3", "--audio-quality", "5", "-o", "/tmp/excerpt.%(ext)s", "https://example.com/watch?v=abc"])
         XCTAssertEqual(args.last, "https://example.com/watch?v=abc")
     }
     func testHistoryUpsertKeepsLatestTrackOnce() {
@@ -62,6 +62,28 @@ final class NeedleDesktopTests: XCTestCase {
         store.upsert(TrackRequest(id: id, artist: "A", title: "T2"))
         XCTAssertEqual(store.tracks.count, 1)
         XCTAssertEqual(store.tracks.first?.title, "T2")
+    }
+
+    func testLibraryInspectionDecodesEmbeddedArtworkMetadata() throws {
+        let data = Data(#"{"ok":true,"track":{"path":"/tmp/song.mp3","tag_type":"ID3v2","artist":"Artist","title":"Song","album":null,"album_artist":null,"track":null,"disc":null,"date":null,"genre":null,"comment":null,"artwork":[{"index":0,"mime_type":"image/jpeg","bytes":1234,"extracted_path":"/tmp/artwork-0.jpeg"}]}}"#.utf8)
+        let response = try NeedleCLIService.parseLastJSON(LibraryRepairService.InspectionResponse.self, data: data)
+        XCTAssertEqual(response.track.artist, "Artist")
+        XCTAssertEqual(response.track.artwork.first?.mimeType, "image/jpeg")
+        XCTAssertEqual(response.track.artwork.first?.bytes, 1234)
+    }
+
+    func testLibraryRepairResponsePreservesBackupPath() throws {
+        let data = Data(#"{"ok":true,"backup_path":"/tmp/.song.needle-backup-1.mp3","track":{"path":"/tmp/song.mp3","artist":"Artist","title":"Song","album":"Album","artwork":[]}}"#.utf8)
+        let response = try NeedleCLIService.parseLastJSON(LibraryRepairService.RepairResponse.self, data: data)
+        XCTAssertEqual(response.backupPath, "/tmp/.song.needle-backup-1.mp3")
+        XCTAssertEqual(response.track.album, "Album")
+    }
+
+    func testLibrarySuggestionDecodesArtworkURLFromCLIJSON() throws {
+        let data = Data(#"{"ok":true,"warning":"The release metadata may differ from this remix.","suggestion":{"artist":"Artist","title":"Song","album":"Album","artwork_url":"https://example.com/art.jpg"}}"#.utf8)
+        let response = try NeedleCLIService.parseLastJSON(LibraryRepairService.SuggestionsResponse.self, data: data)
+        XCTAssertEqual(response.suggestion?.artworkURL, "https://example.com/art.jpg")
+        XCTAssertNotNil(response.warning)
     }
 
     @MainActor

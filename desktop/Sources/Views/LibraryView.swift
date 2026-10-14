@@ -4,6 +4,7 @@ import AppKit
 struct LibraryView: View {
     let model: AppModel
     @State private var query = ""
+    @State private var repairTrack: TrackRequest?
     private var folder: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Music/needle") }
     private var tracks: [TrackRequest] { model.history.tracks.filter { $0.savedPath != nil } }
 
@@ -39,9 +40,25 @@ struct LibraryView: View {
                 if matchingTracks.isEmpty {
                     ContentUnavailableView.search(text: query)
                 } else {
-                    List(matchingTracks) { track in TrackRow(track: track, model: model) }.listStyle(.inset)
+                    List(matchingTracks) { track in HStack { LibraryArtwork(track: track, model: model); TrackRow(track: track, model: model); Button("Repair") { repairTrack = track }.buttonStyle(.bordered) } }.listStyle(.inset)
                 }
             }
-        }.padding(32)
+        }.padding(32).sheet(item: $repairTrack) { track in LibraryRepairView(model: model, track: track) }
+    }
+}
+
+private struct LibraryArtwork: View {
+    let track: TrackRequest
+    let model: AppModel
+    @State private var artworkPath: String?
+    var body: some View {
+        ArtworkThumbnail(path: artworkPath).frame(width: 44, height: 44)
+            .accessibilityLabel("Embedded artwork for \(track.title)")
+            .task(id: track.date) {
+                artworkPath = nil
+                if case .success(let inspection) = await LibraryRepairService().inspect(track, settings: model.settings.value) {
+                    artworkPath = inspection.artwork.first?.extractedPath
+                }
+            }
     }
 }

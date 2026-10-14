@@ -17,7 +17,7 @@ struct PreviewControlsView: View {
                     .foregroundStyle(.secondary)
                 if isCurrent && service.isPreparing {
                     ProgressView().controlSize(.small)
-                    Text("Preparing a 30-second preview…")
+                    Text("Preparing a full-track preview…")
                     Spacer()
                     Button("Cancel") { service.stop() }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -27,26 +27,48 @@ struct PreviewControlsView: View {
                     Spacer()
                     Button("Retry") { service.retry(candidate: candidate) }
                 } else {
-                    Button {
-                        if isCurrent { service.togglePlayback() } else { service.start(candidate: candidate) }
-                    } label: {
-                        Label(isCurrent && service.isPlaying ? "Pause preview" : isCurrent ? "Play preview" : "Preview 30 sec",
-                              systemImage: isCurrent && service.isPlaying ? "pause.fill" : "play.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    if isCurrent {
-                        Slider(value: value, in: 0...max(service.duration, 0.1))
-                            .frame(maxWidth: 260)
-                            .accessibilityLabel("Preview position")
-                        Text("\(format(service.elapsed)) / \(format(service.duration))")
-                            .monospacedDigit().foregroundStyle(.secondary)
-                        Button("Stop") { service.stop() }
-                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Button {
+                                if isCurrent { service.togglePlayback() } else { service.start(candidate: candidate) }
+                            } label: {
+                                Label(isCurrent && service.isPlaying ? "Pause preview" : isCurrent ? "Play preview" : "Preview recording",
+                                      systemImage: isCurrent && service.isPlaying ? "pause.fill" : "play.fill")
+                            }
+                            .buttonStyle(.bordered)
+                            if isCurrent {
+                                Text("\(format(service.elapsed)) / \(format(service.duration))")
+                                    .monospacedDigit().foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                                Button("Stop") { service.stop() }
+                                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                            }
+                        }
+                        if isCurrent {
+                            Slider(value: value, in: 0...max(service.duration, 0.1))
+                                .accessibilityLabel("Preview position")
+                            HStack(spacing: 12) {
+                                Button("−10") { service.seek(by: -10) }
+                                Button("+10") { service.seek(by: 10) }
+                                Button("Skip intro") { service.skipIntro() }
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(service.isPreparing)
+                        }
                     }
                 }
             }
+            if isCurrent, !service.isPreparing, service.duration > 0 {
+                HStack(spacing: 12) {
+                    Toggle("Keep position when switching sources", isOn: $service.keepTimestampAcrossCandidates)
+                        .toggleStyle(.checkbox)
+                    Text("Full track · temporary")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(.leading, 2)
+            }
             if isCurrent, case .failed = service.state {
-                Text("Needle keeps the preview temporary and does not save it to your library.")
+                Text("Needle keeps previews temporary and does not save them to your library.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

@@ -84,3 +84,14 @@ Each saved recording receives a JSON provenance sidecar containing the request, 
 The Firefox / Zen extension turns the selected page or link into an immutable direct URL request. See [browser-extension.md](browser-extension.md) for installation and trust boundaries.
 
 The optional Spicetify companion adds indexed local files to the named Spotify playlist. Ordinary Spotify Local Files playback remains available without the companion.
+
+## Inspect and repair existing files
+
+```bash
+needle inspect "/path/to/recording.mp3" --json
+needle repair-suggestions "/path/to/recording.mp3" --json
+needle repair "/path/to/recording.mp3" --artist "Artist" --title "Title" --album "Album" --json
+needle repair "/path/to/recording.mp3" --clear-album --artwork "/path/to/cover.jpg" --json
+```
+
+Repair changes embedded tags and artwork without downloading or converting audio. A sibling backup preserves the original file; its path is returned in the JSON response. Existing provenance and unrelated tags are preserved. `--artwork-url` accepts an HTTP(S) image; images are validated and limited to 10 MiB. Suggestions do not apply changes automatically, and variant warnings help avoid replacing a remix's metadata with the original recording's.

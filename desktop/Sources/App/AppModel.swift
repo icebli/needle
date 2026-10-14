@@ -11,7 +11,9 @@ final class AppModel {
     var metadata: Metadata?
     var requestSnapshot: RequestSnapshot?
     var isSearching = false
-    var isSaving = false
+    var isSaving: Bool { !saveServices.isEmpty }
+    private var saveServices: [UUID: NeedleCLIService] = [:]
+    var reviewQueue: ReviewQueue
     var isCancelling = false
     var isCheckingTools = false
     var tools: DoctorResponse?
@@ -25,7 +27,10 @@ final class AppModel {
 
     init(defaults: UserDefaults = .standard) {
         settings = SettingsStore(defaults: defaults)
-        history = HistoryStore(defaults: defaults)
+        let savedHistory = HistoryStore(defaults: defaults)
+        history = savedHistory
+        reviewQueue = ReviewQueue(defaults: defaults, history: savedHistory)
+        reviewQueue.onSaved = { [weak self] track, spotify in if spotify { self?.enqueue(track) } }
         recoverSpotifyJobs()
     }
 
@@ -72,7 +77,7 @@ final class AppModel {
     }
 
     func clearSearch() {
-        guard !isBusy else { return }
+        guard !isSearching else { return }
         searchResults = []
         metadata = nil
         requestSnapshot = nil
@@ -82,11 +87,14 @@ final class AppModel {
     func cancelCurrentOperation() {
         guard isBusy, !isCancelling else { return }
         isCancelling = true
-        Task { await cli.cancel() }
+        Task {
+            if isSearching { await cli.cancel() }
+            else if let service = saveServices.values.first { await service.cancel() }
+        }
     }
 
     func search(artist: String, title: String, album: String = "", sourceURL: String?) {
-        guard !isBusy, !isCheckingTools else { return }
+        guard !isSearching, !isCheckingTools else { return }
         let artist = artist.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = (sourceURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -122,32 +130,35 @@ final class AppModel {
     }
 
     func save(candidate: CandidateResult, queueSpotify: Bool) {
-        guard !isBusy, !isCheckingTools else { return }
+        guard !isSearching, !isCheckingTools else { return }
         guard candidate.score.status != "rejected", let snapshot = requestSnapshot,
               searchResults.contains(where: { $0.id == candidate.id && $0.candidate.url == candidate.candidate.url }),
-              Self.mediaURL(candidate.candidate.url) != nil else {
+              Self.mediaURL(candidate.candidate.url) != nil,
+              selectedCandidateID != candidate.id else {
             message = "Choose an eligible recording from the current search."
             return
         }
-        let album = snapshot.album.isEmpty ? (metadata?.album ?? "") : snapshot.album
+        let album = snapshot.album
         let track = TrackRequest(artist: snapshot.artist, title: snapshot.title, album: album,
                                  sourceURL: candidate.candidate.url, stage: .metadata,
                                  settingsSnapshot: snapshot.settings)
         history.upsert(track)
-        isSaving = true
+        let downloadService = NeedleCLIService()
+        saveServices[track.id] = downloadService
+        selectedCandidateID = candidate.id
         destination = .activity
         message = nil
         Task { [self] in
-            let result = await cli.get(track: track, settings: snapshot.settings, onProgress: { [weak self] stage in
+            let result = await downloadService.get(track: track, settings: snapshot.settings, onProgress: { [weak self] stage in
                 Task { @MainActor in
-                    guard let self, self.isSaving, let stage = JobStage.progress(stage),
+                    guard let self, self.saveServices[track.id] != nil, let stage = JobStage.progress(stage),
                           var current = self.history.tracks.first(where: { $0.id == track.id }),
                           current.savedPath == nil else { return }
                     current.stage = stage
                     self.history.upsert(current)
                 }
             })
-            isSaving = false
+            saveServices.removeValue(forKey: track.id)
             isCancelling = false
             switch result {
             case .success(var saved):

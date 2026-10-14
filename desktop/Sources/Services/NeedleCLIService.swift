@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Darwin
 
 struct ProcessResult {
@@ -63,6 +64,26 @@ actor NeedleCLIService {
         }
     }
 
+    struct SourceIdentity: Decodable {
+        let ok: Bool
+        let artist: String?
+        let title: String?
+        let error: String?
+    }
+
+    func identifyURL(_ url: String, settings: NeedleSettings) async -> Result<SourceIdentity, Error> {
+        do {
+            let result = try await execute(["identify-url", url, "--json"], settings: settings)
+            let response = try Self.parseLastJSON(SourceIdentity.self, data: result.output)
+            guard response.ok else { throw CLIError.message(response.error ?? "Edit artist and title to search this link.") }
+            return .success(response)
+        } catch { return .failure(error) }
+    }
+
+    func runJSONCommand(_ arguments: [String], settings: NeedleSettings) async throws -> Data {
+        try await execute(arguments, settings: settings).output
+    }
+
     func doctor(settings: NeedleSettings) async -> Result<DoctorResponse, Error> {
         do {
             let result = try await execute(["doctor", "--json"], settings: settings)
@@ -110,15 +131,10 @@ actor NeedleCLIService {
     func cancel() {
         guard let process = activeProcess, process.isRunning else { return }
         wasCancelled = true
-        // Stop only descendants of this operation, then its CLI. yt-dlp/ffmpeg
-        // otherwise survive terminating their parent and retain the output pipes.
-        for pid in Self.descendants(of: process.processIdentifier).reversed() {
-            Darwin.kill(pid, SIGTERM)
-        }
-        process.terminate()
+        Self.terminateOwnedProcess(process)
     }
 
-    private static func descendants(of parent: Int32) -> [Int32] {
+    private nonisolated static func descendants(of parent: Int32) -> [Int32] {
         let ps = Process()
         ps.executableURL = URL(fileURLWithPath: "/bin/ps")
         ps.arguments = ["-axo", "pid=,ppid="]
@@ -141,6 +157,42 @@ actor NeedleCLIService {
         return result
     }
 
+    private struct ProcessIdentity: Sendable {
+        let pid: Int32
+        let start: String
+    }
+
+    private nonisolated static func processIdentity(_ pid: Int32) -> ProcessIdentity? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", String(pid), "-o", "pid=,lstart="]
+        let pipe = Pipe(); process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+        let fields = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isWhitespace)
+        guard fields.count >= 6, let parsed = Int32(fields[0]) else { return nil }
+        return ProcessIdentity(pid: parsed, start: fields.dropFirst().joined(separator: " "))
+    }
+
+    private nonisolated static func matchesCurrentProcess(_ identity: ProcessIdentity) -> Bool {
+        guard let current = processIdentity(identity.pid) else { return false }
+        return current.pid == identity.pid && current.start == identity.start
+    }
+
+    private nonisolated static func terminateOwnedProcess(_ process: Process) {
+        let descendants = descendants(of: process.processIdentifier).compactMap(processIdentity)
+        // Stop only descendants of this operation, then its CLI. yt-dlp/ffmpeg
+        // otherwise survive terminating their parent and retain the output pipes.
+        for identity in descendants.reversed() { Darwin.kill(identity.pid, SIGTERM) }
+        if process.isRunning { process.terminate() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
+            if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+            for identity in descendants where matchesCurrentProcess(identity) {
+                Darwin.kill(identity.pid, SIGKILL)
+            }
+        }
+    }
+
     private func execute(_ args: [String], settings: NeedleSettings,
                          onProgress: @escaping @Sendable (String) -> Void = { _ in }) async throws -> ProcessResult {
         guard activeProcess == nil else { throw CLIError.message("Needle is already working. Wait or cancel the current operation.") }
@@ -161,6 +213,10 @@ actor NeedleCLIService {
         try process.run()
         activeProcess = process
         wasCancelled = false
+        let quitObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+            Self.terminateOwnedProcess(process)
+        }
+        defer { NotificationCenter.default.removeObserver(quitObserver) }
         let result = await withCheckedContinuation { (continuation: CheckedContinuation<ProcessResult, Never>) in
             DispatchQueue.global().async {
                 let group = DispatchGroup()

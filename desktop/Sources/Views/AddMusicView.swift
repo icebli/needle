@@ -18,6 +18,12 @@ struct AddMusicView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 SetupView(model: model)
+                HStack {
+                    Label("Have a list of recordings?", systemImage: "list.bullet.rectangle")
+                    Spacer()
+                    Button("Open review queue") { model.destination = .reviewQueue }
+                }.font(.callout)
+
                 VStack(alignment: .leading, spacing: 16) {
                     Label("Find a recording", systemImage: "1.circle.fill").font(.headline)
                     HStack(spacing: 14) {
@@ -36,15 +42,15 @@ struct AddMusicView: View {
                         }
                         .buttonStyle(.borderedProminent).tint(.orange)
                         .keyboardShortcut(.return, modifiers: .command)
-                        .disabled(model.isBusy || model.isCheckingTools || artist.trimmingCharacters(in: .whitespaces).isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(model.isSearching || model.isCheckingTools || artist.trimmingCharacters(in: .whitespaces).isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty)
                         if model.isSearching { ProgressView().controlSize(.small) }
-                        if model.isBusy {
+                        if model.isSearching {
                             Button(model.isCancelling ? "Cancelling…" : "Cancel") { model.cancelCurrentOperation() }
                                 .disabled(model.isCancelling)
                         }
                         Spacer()
                         if !model.searchResults.isEmpty {
-                            Button("Clear results") { resetSearch() }.disabled(model.isBusy)
+                            Button("Clear results") { resetSearch() }.disabled(model.isSearching)
                         }
                     }
                 }
@@ -62,7 +68,7 @@ struct AddMusicView: View {
                         Text("Requested: \(model.requestSnapshot?.artist ?? artist) — \(model.requestSnapshot?.title ?? title)")
                             .foregroundStyle(.secondary)
                         Toggle("Add to \(model.requestSnapshot?.settings.playlistName ?? "Needle") in Spotify after saving", isOn: $queueSpotify)
-                            .toggleStyle(.checkbox).disabled(format != "mp3" || model.isBusy)
+                            .toggleStyle(.checkbox).disabled(format != "mp3" || model.isSearching)
                         if format != "mp3" {
                             Text("Advanced \(format.uppercased()) output: saved locally. Automatic Spotify delivery is available for MP3.")
                                 .font(.callout).foregroundStyle(.secondary)
@@ -72,7 +78,7 @@ struct AddMusicView: View {
                         }
                     }
                     ForEach(model.searchResults.filter { showExcluded || $0.score.status != "rejected" }) { result in
-                        CandidateCard(result: result, disabled: model.isBusy || model.isCheckingTools, preview: preview,
+                        CandidateCard(result: result, disabled: model.isSearching || model.isCheckingTools, preview: preview,
                                       saveLabel: spotifyEnabled ? "Save & add to Spotify" : "Save recording") {
                             preview.stop()
                             model.save(candidate: result, queueSpotify: spotifyEnabled)
@@ -103,7 +109,7 @@ struct AddMusicView: View {
     private func field(_ label: String, placeholder: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-            TextField(placeholder, text: text).textFieldStyle(.roundedBorder).disabled(model.isBusy)
+            TextField(placeholder, text: text).textFieldStyle(.roundedBorder).disabled(model.isSearching)
                 .onSubmit { search() }
         }
     }
@@ -124,24 +130,25 @@ struct CandidateCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 16) {
+            HStack(alignment: .top, spacing: 14) {
                 artwork
                 VStack(alignment: .leading, spacing: 6) {
                     Text(result.candidate.title).font(.headline).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(result.candidate.uploader ?? result.candidate.provider).foregroundStyle(.secondary)
                     Text("\(result.candidate.provider.capitalized) · \(duration)").font(.caption).foregroundStyle(.secondary)
-                    CandidateMetadataView(candidate: result.candidate)
-                    Label(rejected ? "Excluded recording" : result.score.status == "recommended" ? "Recommended match" : "Please check this version",
-                          systemImage: rejected ? "nosign" : result.score.status == "recommended" ? "checkmark.seal" : "exclamationmark.triangle")
-                        .font(.caption.weight(.semibold)).foregroundStyle(rejected ? Color.secondary : Color.orange)
-                }
-                Spacer(minLength: 12)
-                VStack(alignment: .trailing, spacing: 10) {
-                    Button("Open source") { if let source { NSWorkspace.shared.open(source) } }
-                        .disabled(source == nil)
-                    Button(saveLabel, action: save).buttonStyle(.borderedProminent).tint(.orange)
-                        .disabled(rejected || disabled || source == nil)
-                }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            CandidateMetadataView(candidate: result.candidate)
+            Label(rejected ? "Excluded recording" : result.score.status == "recommended" ? "Recommended match" : "Please check this version",
+                  systemImage: rejected ? "nosign" : result.score.status == "recommended" ? "checkmark.seal" : "exclamationmark.triangle")
+                .font(.caption.weight(.semibold)).foregroundStyle(rejected ? Color.secondary : Color.orange)
+            HStack {
+                Button("Open source") { if let source { NSWorkspace.shared.open(source) } }
+                    .disabled(source == nil)
+                Spacer(minLength: 8)
+                Button(saveLabel, action: save).buttonStyle(.borderedProminent).tint(.orange)
+                    .fixedSize().disabled(rejected || disabled || source == nil)
             }
             PreviewControlsView(service: preview, candidate: result)
             ForEach(Array((rejected ? result.score.rejects : result.score.warnings).enumerated()), id: \.offset) { _, reason in
@@ -174,7 +181,7 @@ struct CandidateCard: View {
                 artworkFallback
             }
         }
-        .frame(width: 96, height: 96).clipShape(RoundedRectangle(cornerRadius: 10))
+        .frame(width: 72, height: 72).clipShape(RoundedRectangle(cornerRadius: 10))
         .accessibilityLabel("Source artwork for \(result.candidate.title)")
         .help("Artwork from the source upload; it does not verify the recording.")
     }
