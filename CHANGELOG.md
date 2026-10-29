@@ -2,6 +2,12 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.9.2
+
+- Reuse checksum-verified corresponding-source archives when upstream source servers are unavailable during release packaging.
+- Update Rustls to 0.23.46 for current TLS security fixes.
+- Include the album artwork and browser-session improvements prepared in 0.9.0 and 0.9.1.
+
 ## 0.9.1
 
 - Use a selected browser session for source lookup, previews, discovery, and downloads, including Zen profiles.

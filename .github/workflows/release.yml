@@ -84,7 +84,44 @@ jobs:
           kill "$app_pid"
           cp "$app/Contents/Resources/NeedleToolchain.json" dist/
           cp "$app/Contents/Resources/THIRD_PARTY_NOTICES.md" dist/
+      - name: Restore optional published source cache
+        env:
+          NEEDLE_SOURCE_CACHE: ${{ runner.temp }}/needle-source-cache
+        run: |
+          mkdir -p "$NEEDLE_SOURCE_CACHE"
+          archive="$RUNNER_TEMP/Needle-previous-third-party-provenance.tar.gz"
+          if curl --fail --location --retry 2 --connect-timeout 15 --max-time 180 --output "$archive" "https://github.com/${{ github.repository }}/releases/latest/download/Needle-third-party-provenance.tar.gz"; then
+            python3 - "$archive" "$NEEDLE_SOURCE_CACHE" <<'PY'
+          import pathlib
+          import shutil
+          import sys
+          import tarfile
+
+          archive, cache = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          try:
+              with tarfile.open(archive) as tar:
+                  members = []
+                  for member in tar.getmembers():
+                      path = pathlib.PurePosixPath(member.name)
+                      if path.is_absolute() or ".." in path.parts:
+                          raise ValueError(f"unsafe source cache path: {member.name}")
+                      if path.parts and path.parts[0] == "sources" and len(path.parts) > 1:
+                          if len(path.parts) != 2 or not member.isfile():
+                              raise ValueError(f"unsafe source cache member: {member.name}")
+                          members.append(member)
+                  for member in members:
+                      with tar.extractfile(member) as source, (cache / pathlib.PurePosixPath(member.name).name).open("wb") as target:
+                          shutil.copyfileobj(source, target)
+              print(f"Restored {len(members)} optional source archives; collection will verify current checksums")
+          except (tarfile.TarError, OSError, ValueError) as error:
+              print(f"Published source cache unavailable ({error}); collection will fetch upstream")
+          PY
+          else
+            echo "Published source cache unavailable; collection will fetch upstream"
+          fi
       - name: Capture third-party build provenance
+        env:
+          NEEDLE_SOURCE_CACHE: ${{ runner.temp }}/needle-source-cache
         run: |
           app="$GITHUB_WORKSPACE/target/desktop/Needle.app"
           mkdir -p dist/third-party

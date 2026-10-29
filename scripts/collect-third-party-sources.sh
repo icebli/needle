@@ -31,13 +31,17 @@ export DOWNLOAD_SOURCES
 export PACKAGE_RESOLVED="$(cd "$(dirname "$0")/.." && pwd)/desktop/Package.resolved"
 python3 - <<'PY'
 import hashlib
+import http.client
 import json
 import os
 import shutil
 import pathlib
 import subprocess
+import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 app = pathlib.Path(os.environ["APP_PATH"])
@@ -64,31 +68,45 @@ def brew_json(*names: str) -> dict:
     )
     return json.loads(result.stdout)
 
-def download(url: str, target: pathlib.Path) -> str:
+def download(url: str, target: pathlib.Path, expected: str | None = None) -> str:
+    cache_dir = os.environ.get("NEEDLE_SOURCE_CACHE")
+    if cache_dir and expected:
+        cached = pathlib.Path(cache_dir) / target.name
+        if cached.is_file():
+            if sha256(cached) == expected:
+                shutil.copyfile(cached, target)
+                return sha256(target)
+            print(f"Ignoring source cache checksum mismatch: {cached.name}", file=sys.stderr)
     request = urllib.request.Request(url, headers={"User-Agent": "needle-release-source-capture/1"})
-    with urllib.request.urlopen(request, timeout=90) as response, target.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
-    return sha256(target)
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response, target.open("wb") as handle:
+                shutil.copyfileobj(response, handle)
+            return sha256(target)
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead):
+            target.unlink(missing_ok=True)
+            if attempt == 2:
+                raise
+            time.sleep(2 ** attempt)
 
 def download_verified(url: str, target: pathlib.Path, expected: str | None = None) -> tuple[str, str | None]:
-    actual = download(url, target)
+    actual = download(url, target, expected)
     if expected and actual != expected:
+        target.unlink(missing_ok=True)
         raise SystemExit(f"source checksum mismatch for {url}: {actual} != {expected}")
     return actual, expected
 
 def download_pypi(name: str, version: str, target: pathlib.Path) -> tuple[str, str]:
     metadata_url = f"https://pypi.org/pypi/{name}/{version}/json"
-    request = urllib.request.Request(metadata_url, headers={"User-Agent": "needle-release-source-capture/1"})
-    with urllib.request.urlopen(request, timeout=90) as response:
-        metadata = json.load(response)
+    with tempfile.TemporaryDirectory(prefix="needle-pypi-") as directory:
+        metadata_path = pathlib.Path(directory) / "metadata.json"
+        download(metadata_url, metadata_path)
+        metadata = json.loads(metadata_path.read_text())
     release = next((item for item in metadata["urls"] if item["packagetype"] == "sdist"), None)
     if not release:
         raise SystemExit(f"PyPI sdist missing for {name}=={version}")
-    actual = download(release["url"], target)
     expected = release["digests"]["sha256"]
-    if actual != expected:
-        raise SystemExit(f"PyPI source checksum mismatch for {name}: {actual} != {expected}")
-    return actual, expected
+    return download_verified(release["url"], target, expected)
 
 def extract_license(archive: pathlib.Path, destination: pathlib.Path) -> str | None:
     try:
@@ -252,9 +270,7 @@ if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
         if expected:
             filename = pathlib.PurePosixPath(url.split("?", 1)[0]).name or f"{item['name']}.source"
             archive = source_dir / f"{item['name']}-{item.get('versions', {}).get('stable', 'unknown')}-{filename}"
-            actual = download(url, archive)
-            if actual != expected:
-                raise SystemExit(f"Homebrew source checksum mismatch for {item['name']}: {actual} != {expected}")
+            actual, _ = download_verified(url, archive, expected)
             source_basis = "homebrew-published-sha256"
         elif source_revision:
             # Git-backed formulas such as x264 have no tarball checksum. Pin
@@ -298,7 +314,9 @@ if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
         archive = source_dir / filename
         expected = None
         if checksums_url:
-            checksum_text = urllib.request.urlopen(urllib.request.Request(checksums_url, headers={"User-Agent": "needle-release-source-capture/1"}), timeout=90).read().decode()
+            checksum_path = out / f"{name}-source-checksums.txt"
+            download(checksums_url, checksum_path)
+            checksum_text = checksum_path.read_text()
             expected = next((line.split()[0] for line in checksum_text.splitlines() if line.split()[-1] == checksum_name), None)
             if not expected:
                 raise SystemExit(f"published checksum missing for {name}: {checksum_name}")
