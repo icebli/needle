@@ -3,6 +3,15 @@
     <channel>
         <title>Needle</title>
         <item>
+            <title>0.8.1</title>
+            <pubDate>Wed, 28 Oct 2026 20:34:57 -0700</pubDate>
+            <sparkle:version>8001</sparkle:version>
+            <sparkle:shortVersionString>0.8.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/icebli/needle/releases/download/v0.8.1/Needle-0.8.1.dmg" length="107790806" type="application/octet-stream" sparkle:edSignature="wGc/44j4stu3ikV4fhhbrrYbiMGGVWqET5CamR+b6IHUtWBsbHzwLCtG4D49/ILqq8uFcRLCwc6cAaMxo0wHDw=="/>
+        </item>
+        <item>
             <title>0.8.0</title>
             <pubDate>Wed, 28 Oct 2026 19:31:37 -0700</pubDate>
             <sparkle:version>8000</sparkle:version>
@@ -20,16 +29,6 @@
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <enclosure url="https://github.com/icebli/needle/releases/download/v0.7.0/Needle-0.7.0.dmg" length="106924685" type="application/octet-stream" sparkle:edSignature="jmDQCm7uA5AItmXoNCom9Z/9lxLaZ2dDvLWrggsckkoarcqgMUhpra/9eMT08BiUWRWPY0voZ+jtEODKOTJ6Dg=="/>
-        </item>
-        <item>
-            <title>0.5.0</title>
-            <pubDate>Tue, 13 Oct 2026 21:07:29 -0700</pubDate>
-            <sparkle:version>5000</sparkle:version>
-            <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[<h2>Needle 0.5.0</h2><ul><li>Library discovers existing recordings in your Needle folder, including CLI downloads.</li><li>Refresh after adding files outside the app, with no duplicate entries.</li><li>Read embedded tags and artwork while preserving existing files and Spotify status.</li></ul><p>This release is unsigned and not notarized. macOS may require Privacy &amp; Security → Open Anyway.</p>]]></description>
-            <enclosure url="https://github.com/icebli/needle/releases/download/v0.5.0/Needle-0.5.0.dmg" length="106549192" type="application/octet-stream" sparkle:edSignature="eEKhmuMRZiBjGlbo+axQXp6w8ex+2BYb+FaNYbIBCaqj4dypgM98b9DEKKDYt1eV/XuuWVEoioxI0PoVvqEEDg=="/>
         </item>
     </channel>
 </rss>
