@@ -1,5 +1,5 @@
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use anyhow::{Result, bail};
 use std::process::Command;
 use tracing::debug;
 
@@ -51,6 +51,9 @@ pub struct Candidate {
     pub url: String,
     pub title: String,
     pub uploader: Option<String>,
+    /// Whether the provider reports the uploader channel as verified.
+    #[serde(default)]
+    pub channel_is_verified: Option<bool>,
     /// Milliseconds
     pub duration_ms: Option<u64>,
     pub thumbnail_url: Option<String>,
@@ -153,6 +156,8 @@ struct YtdlpEntry {
     url: Option<String>,
     title: String,
     uploader: Option<String>,
+    #[serde(default)]
+    channel_is_verified: Option<bool>,
     duration: Option<f64>,
     #[serde(alias = "thumbnail_url", alias = "thumbnailUrl")]
     thumbnail: Option<String>,
@@ -193,7 +198,14 @@ pub fn search_sources(
     let mut seen_ids = std::collections::HashSet::new();
 
     for provider in source.providers() {
-        search_provider(yt_dlp_path, queries, max_per_query, *provider, &mut seen_ids, &mut candidates)?;
+        search_provider(
+            yt_dlp_path,
+            queries,
+            max_per_query,
+            *provider,
+            &mut seen_ids,
+            &mut candidates,
+        )?;
     }
 
     Ok(candidates)
@@ -229,15 +241,20 @@ fn search_provider(
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             match serde_json::from_str::<YtdlpEntry>(line) {
                 Ok(entry) => {
                     let seen_key = format!("{}:{}", provider.label(), entry.id);
-                    if seen_ids.contains(&seen_key) { continue; }
+                    if seen_ids.contains(&seen_key) {
+                        continue;
+                    }
                     seen_ids.insert(seen_key);
 
                     let thumbnail_url = thumbnail_url(&entry, provider);
-                    let url = entry.webpage_url
+                    let url = entry
+                        .webpage_url
                         .or(entry.url)
                         .unwrap_or_else(|| provider_fallback_url(provider, &entry.id));
 
@@ -247,6 +264,7 @@ fn search_provider(
                         url,
                         title: entry.title,
                         uploader: entry.uploader,
+                        channel_is_verified: entry.channel_is_verified,
                         duration_ms: entry.duration.map(|d| (d * 1000.0) as u64),
                         thumbnail_url,
                         view_count: entry.view_count,
@@ -273,19 +291,31 @@ fn provider_fallback_url(provider: SearchProvider, id: &str) -> String {
 }
 
 fn thumbnail_url(entry: &YtdlpEntry, provider: SearchProvider) -> Option<String> {
-    entry.thumbnail.clone()
-        .or_else(|| entry.thumbnails.iter()
-            .filter_map(|thumbnail| thumbnail.url.as_ref().map(|url| (thumbnail, url)))
-            .max_by_key(|(thumbnail, _)| (thumbnail.preference.unwrap_or(i64::MIN), thumbnail.width.unwrap_or(0)))
-            .map(|(_, url)| url.clone()))
+    entry
+        .thumbnail
+        .clone()
+        .or_else(|| {
+            entry
+                .thumbnails
+                .iter()
+                .filter_map(|thumbnail| thumbnail.url.as_ref().map(|url| (thumbnail, url)))
+                .max_by_key(|(thumbnail, _)| {
+                    (
+                        thumbnail.preference.unwrap_or(i64::MIN),
+                        thumbnail.width.unwrap_or(0),
+                    )
+                })
+                .map(|(_, url)| url.clone())
+        })
         .or_else(|| match provider {
-            SearchProvider::Youtube => Some(format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", entry.id)),
+            SearchProvider::Youtube => {
+                Some(format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", entry.id))
+            }
             SearchProvider::Soundcloud => None,
         })
 }
 
 /// Resolve a direct URL (not a search) via yt-dlp and return it as a Candidate.
-
 fn is_supported_direct_url(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
@@ -297,16 +327,20 @@ fn is_supported_direct_url(url: &str) -> bool {
     !host.is_empty() && !host.contains(' ')
 }
 
-
 fn clean_codec(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|codec| {
-        let lower = codec.to_ascii_lowercase();
-        !lower.is_empty() && lower != "none" && lower != "unknown"
-    }).map(str::to_string)
+    value
+        .map(str::trim)
+        .filter(|codec| {
+            let lower = codec.to_ascii_lowercase();
+            !lower.is_empty() && lower != "none" && lower != "unknown"
+        })
+        .map(str::to_string)
 }
 
 fn bitrate_kbps(value: Option<f64>) -> Option<u32> {
-    value.filter(|bitrate| bitrate.is_finite() && *bitrate > 0.0).map(|bitrate| bitrate.round() as u32)
+    value
+        .filter(|bitrate| bitrate.is_finite() && *bitrate > 0.0)
+        .map(|bitrate| bitrate.round() as u32)
 }
 
 pub fn resolve_url(yt_dlp_path: &str, url: &str) -> Result<Option<Candidate>> {
@@ -314,7 +348,16 @@ pub fn resolve_url(yt_dlp_path: &str, url: &str) -> Result<Option<Candidate>> {
         bail!("direct URL must be an HTTP(S) media page");
     }
     let output = Command::new(yt_dlp_path)
-        .args([url, "--dump-json", "--skip-download", "--no-playlist", "--format", "bestaudio/best", "--no-warnings", "--quiet"])
+        .args([
+            url,
+            "--dump-json",
+            "--skip-download",
+            "--no-playlist",
+            "--format",
+            "bestaudio/best",
+            "--no-warnings",
+            "--quiet",
+        ])
         .output()?;
 
     if !output.status.success() {
@@ -323,14 +366,30 @@ pub fn resolve_url(yt_dlp_path: &str, url: &str) -> Result<Option<Candidate>> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let line = stdout.lines().next().unwrap_or("").trim();
-    if line.is_empty() { return Ok(None); }
+    if line.is_empty() {
+        return Ok(None);
+    }
 
     let entry: YtdlpEntry = serde_json::from_str(line)?;
-    let thumbnail_url = thumbnail_url(&entry, if url.contains("soundcloud.com") { SearchProvider::Soundcloud } else { SearchProvider::Youtube });
+    let thumbnail_url = thumbnail_url(
+        &entry,
+        if url.contains("soundcloud.com") {
+            SearchProvider::Soundcloud
+        } else {
+            SearchProvider::Youtube
+        },
+    );
 
     // Infer provider from URL
-    let provider = if url.contains("soundcloud.com") { "soundcloud" } else { "youtube" };
-    let resolved_url = entry.webpage_url.or(entry.url.clone()).unwrap_or_else(|| url.to_string());
+    let provider = if url.contains("soundcloud.com") {
+        "soundcloud"
+    } else {
+        "youtube"
+    };
+    let resolved_url = entry
+        .webpage_url
+        .or(entry.url.clone())
+        .unwrap_or_else(|| url.to_string());
 
     Ok(Some(Candidate {
         provider: provider.into(),
@@ -338,6 +397,7 @@ pub fn resolve_url(yt_dlp_path: &str, url: &str) -> Result<Option<Candidate>> {
         url: resolved_url,
         title: entry.title,
         uploader: entry.uploader,
+        channel_is_verified: entry.channel_is_verified,
         duration_ms: entry.duration.map(|d| (d * 1000.0) as u64),
         thumbnail_url,
         view_count: entry.view_count,
@@ -359,8 +419,14 @@ mod tests {
 
     #[test]
     fn source_quality_label_keeps_codec_and_bitrate_visible() {
-        assert_eq!(format_source_quality(Some("opus"), Some(160)), Some("opus 160kbps".into()));
-        assert_eq!(format_source_quality(Some("none"), Some(128)), Some("128kbps".into()));
+        assert_eq!(
+            format_source_quality(Some("opus"), Some(160)),
+            Some("opus 160kbps".into())
+        );
+        assert_eq!(
+            format_source_quality(Some("none"), Some(128)),
+            Some("128kbps".into())
+        );
         assert_eq!(format_source_quality(None, None), None);
     }
 
@@ -373,32 +439,64 @@ mod tests {
 
     #[test]
     fn parses_thumbnail_url_alias_and_prefers_explicit_thumbnail() {
-        let entry: YtdlpEntry = serde_json::from_str(r#"{
+        let entry: YtdlpEntry = serde_json::from_str(
+            r#"{
             "id":"abc",
             "title":"Song",
             "thumbnail_url":"https://cdn.example/thumb.jpg",
             "thumbnails":[{"url":"https://cdn.example/low.jpg","width":120}]
-        }"#).unwrap();
-        assert_eq!(thumbnail_url(&entry, SearchProvider::Youtube).as_deref(), Some("https://cdn.example/thumb.jpg"));
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            thumbnail_url(&entry, SearchProvider::Youtube).as_deref(),
+            Some("https://cdn.example/thumb.jpg")
+        );
     }
 
     #[test]
     fn selects_best_available_thumbnail_before_provider_fallback() {
-        let entry: YtdlpEntry = serde_json::from_str(r#"{
+        let entry: YtdlpEntry = serde_json::from_str(
+            r#"{
             "id":"abc",
             "title":"Song",
             "thumbnails":[
                 {"url":"https://cdn.example/low.jpg","preference":1,"width":120},
                 {"url":"https://cdn.example/high.jpg","preference":2,"width":640}
             ]
-        }"#).unwrap();
-        assert_eq!(thumbnail_url(&entry, SearchProvider::Soundcloud).as_deref(), Some("https://cdn.example/high.jpg"));
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            thumbnail_url(&entry, SearchProvider::Soundcloud).as_deref(),
+            Some("https://cdn.example/high.jpg")
+        );
     }
 
     #[test]
     fn derives_youtube_thumbnail_when_flat_result_has_no_artwork() {
         let entry: YtdlpEntry = serde_json::from_str(r#"{"id":"abc123","title":"Song"}"#).unwrap();
-        assert_eq!(thumbnail_url(&entry, SearchProvider::Youtube).as_deref(), Some("https://i.ytimg.com/vi/abc123/hqdefault.jpg"));
+        assert_eq!(
+            thumbnail_url(&entry, SearchProvider::Youtube).as_deref(),
+            Some("https://i.ytimg.com/vi/abc123/hqdefault.jpg")
+        );
         assert_eq!(thumbnail_url(&entry, SearchProvider::Soundcloud), None);
+    }
+
+    #[test]
+    fn preserves_provider_channel_verification() {
+        let entry: YtdlpEntry = serde_json::from_str(
+            r#"{
+            "id":"abc123",
+            "title":"Wanderlust",
+            "uploader":"The Weeknd",
+            "channel_is_verified":true
+        }"#,
+        )
+        .unwrap();
+        assert_eq!(entry.channel_is_verified, Some(true));
+
+        let unknown: YtdlpEntry = serde_json::from_str(r#"{"id":"other","title":"Song"}"#).unwrap();
+        assert_eq!(unknown.channel_is_verified, None);
     }
 }

@@ -2,6 +2,15 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.8.0
+
+- Listening Room brings artwork-led source comparison, a persistent audition rail, and an evidence inspector to search and review.
+- Inspect every match reason, warning, and rejection before reviewing metadata and approving the exact recording.
+- Bookmarks gains an artwork gallery, compact list, search, source filters, sorting, and keyboard navigation.
+- Updated native macOS styling and Discover presentation.
+- Updated yt-dlp to 2026.10.26 and Sparkle to 2.10.1.
+- Fixed stale metadata results, Swift concurrency warnings, and Sparkle lookup in desktop tests.
+
 ## 0.7.0
 
 - Simpler Discover page with a compact artist chooser, clear review filters, and full-width recording results.

@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
 use regex::Regex;
-use unicode_normalization::UnicodeNormalization;
+use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
+use unicode_normalization::UnicodeNormalization;
 
 /// A title fully broken down for comparison
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -70,6 +70,7 @@ pub enum NegativeMarker {
     Nightcore,
     EightD,
     BassBoost,
+    ChoppedNotSlopped,
     // Soft rejects (configurable)
     Lyrics,
     LyricVideo,
@@ -100,6 +101,7 @@ impl NegativeMarker {
                 | Self::Nightcore
                 | Self::EightD
                 | Self::BassBoost
+                | Self::ChoppedNotSlopped
         )
     }
 
@@ -120,6 +122,7 @@ impl NegativeMarker {
             Self::Nightcore => "nightcore",
             Self::EightD => "8d audio",
             Self::BassBoost => "bass boost",
+            Self::ChoppedNotSlopped => "chopped not slopped",
             Self::Lyrics => "lyrics",
             Self::LyricVideo => "lyric video",
             Self::Visualizer => "visualizer",
@@ -145,9 +148,7 @@ fn re_series() -> &'static Regex {
 
 fn re_feat() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)\s*[\(\[](feat\.?|ft\.?|featuring)[^\)\]]*[\)\]]").unwrap()
-    })
+    RE.get_or_init(|| Regex::new(r"(?i)\s*[\(\[](feat\.?|ft\.?|featuring)[^\)\]]*[\)\]]").unwrap())
 }
 
 fn re_parens() -> &'static Regex {
@@ -197,43 +198,92 @@ fn detect_negative_markers(normalized: &str) -> Vec<NegativeMarker> {
     let mut markers = Vec::new();
     let n = normalized;
 
-    if n.contains("reaction") { markers.push(NegativeMarker::Reaction); }
-    if n.contains("review") { markers.push(NegativeMarker::Review); }
-    if n.contains("instrumental") { markers.push(NegativeMarker::Instrumental); }
-    if n.contains("karaoke") { markers.push(NegativeMarker::Karaoke); }
+    if n.contains("reaction") {
+        markers.push(NegativeMarker::Reaction);
+    }
+    if n.contains("review") {
+        markers.push(NegativeMarker::Review);
+    }
+    if n.contains("instrumental") {
+        markers.push(NegativeMarker::Instrumental);
+    }
+    if n.contains("karaoke") {
+        markers.push(NegativeMarker::Karaoke);
+    }
     // "cover" but not "discover" / "recover"
-    if regex_contains(n, r"\bcover\b") { markers.push(NegativeMarker::Cover); }
-    if regex_contains(n, r"\bremix\b") { markers.push(NegativeMarker::Remix); }
+    if regex_contains(n, r"\bcover\b") {
+        markers.push(NegativeMarker::Cover);
+    }
+    if regex_contains(n, r"\bremix\b") {
+        markers.push(NegativeMarker::Remix);
+    }
     // catch compound mix tags: "waowmix", "drumix", "jazzymix" etc.
     // \b[a-z]{2,}mix\b won't match "climax"/"matrix" (don't end in "mix")
     if !markers.contains(&NegativeMarker::Remix) && regex_contains(n, r"\b[a-z]{2,}mix\b") {
         markers.push(NegativeMarker::Remix);
     }
-    if n.contains("type beat") { markers.push(NegativeMarker::TypeBeat); }
-    if n.contains("podcast") { markers.push(NegativeMarker::Podcast); }
-    if n.contains("interview") { markers.push(NegativeMarker::Interview); }
-    if n.contains("tutorial") { markers.push(NegativeMarker::Tutorial); }
+    if n.contains("type beat") {
+        markers.push(NegativeMarker::TypeBeat);
+    }
+    if n.contains("podcast") {
+        markers.push(NegativeMarker::Podcast);
+    }
+    if n.contains("interview") {
+        markers.push(NegativeMarker::Interview);
+    }
+    if n.contains("tutorial") {
+        markers.push(NegativeMarker::Tutorial);
+    }
     if n.contains("slowed") || (n.contains("slow") && n.contains("reverb")) {
         markers.push(NegativeMarker::SlowedReverb);
     }
-    if n.contains("sped up") || n.contains("speed up") { markers.push(NegativeMarker::SpedUp); }
-    if n.contains("nightcore") { markers.push(NegativeMarker::Nightcore); }
-    if regex_contains(n, r"\b8\s*d\b") { markers.push(NegativeMarker::EightD); }
-    if n.contains("bass boost") { markers.push(NegativeMarker::BassBoost); }
-    if regex_contains(n, r"\blyric\b") { markers.push(NegativeMarker::Lyrics); }
-    if n.contains("lyric video") { markers.push(NegativeMarker::LyricVideo); }
-    if n.contains("visualizer") || n.contains("visualiser") { markers.push(NegativeMarker::Visualizer); }
-    if regex_contains(n, r"\blive\b") { markers.push(NegativeMarker::Live); }
-    if regex_contains(n, r"\bacoustic\b") { markers.push(NegativeMarker::Acoustic); }
-    if regex_contains(n, r"\bclean\b") { markers.push(NegativeMarker::CleanVersion); }
-    if n.contains("radio edit") { markers.push(NegativeMarker::RadioEdit); }
-    if n.contains("remaster") || n.contains("remastered") { markers.push(NegativeMarker::Remaster); }
+    if n.contains("sped up") || n.contains("speed up") {
+        markers.push(NegativeMarker::SpedUp);
+    }
+    if n.contains("nightcore") {
+        markers.push(NegativeMarker::Nightcore);
+    }
+    if regex_contains(n, r"\b8\s*d\b") {
+        markers.push(NegativeMarker::EightD);
+    }
+    if n.contains("bass boost") {
+        markers.push(NegativeMarker::BassBoost);
+    }
+    if n.contains("chopped not slopped") || n.contains("chopped & slopped") {
+        markers.push(NegativeMarker::ChoppedNotSlopped);
+    }
+    if regex_contains(n, r"\blyric\b") {
+        markers.push(NegativeMarker::Lyrics);
+    }
+    if n.contains("lyric video") {
+        markers.push(NegativeMarker::LyricVideo);
+    }
+    if n.contains("visualizer") || n.contains("visualiser") {
+        markers.push(NegativeMarker::Visualizer);
+    }
+    if regex_contains(n, r"\blive\b") {
+        markers.push(NegativeMarker::Live);
+    }
+    if regex_contains(n, r"\bacoustic\b") {
+        markers.push(NegativeMarker::Acoustic);
+    }
+    if regex_contains(n, r"\bclean\b") {
+        markers.push(NegativeMarker::CleanVersion);
+    }
+    if n.contains("radio edit") {
+        markers.push(NegativeMarker::RadioEdit);
+    }
+    if n.contains("remaster") || n.contains("remastered") {
+        markers.push(NegativeMarker::Remaster);
+    }
 
     markers
 }
 
 fn regex_contains(s: &str, pattern: &str) -> bool {
-    Regex::new(pattern).map(|re| re.is_match(s)).unwrap_or(false)
+    Regex::new(pattern)
+        .map(|re| re.is_match(s))
+        .unwrap_or(false)
 }
 
 // ─── Main normalizer ──────────────────────────────────────────────────────────
@@ -256,10 +306,7 @@ pub fn normalize_title(raw: &str) -> NormalizedTitle {
     let series_marker = extract_series_marker(&stripped);
 
     // Remove series marker from title to get base
-    let base_title = re_series()
-        .replace_all(&stripped, "")
-        .trim()
-        .to_string();
+    let base_title = re_series().replace_all(&stripped, "").trim().to_string();
     let base_title = clean_trailing_punctuation(&base_title);
 
     // Version markers (explicit, unofficial, etc.)
@@ -294,9 +341,15 @@ fn extract_series_marker(s: &str) -> Option<SeriesMarker> {
 fn detect_version_markers(raw: &str) -> Vec<String> {
     let mut markers = Vec::new();
     let lower = raw.to_ascii_lowercase();
-    if lower.contains("official") { markers.push("official".into()); }
-    if lower.contains("explicit") { markers.push("explicit".into()); }
-    if lower.contains("hd") || lower.contains("hq") { markers.push("hd/hq".into()); }
+    if lower.contains("official") {
+        markers.push("official".into());
+    }
+    if lower.contains("explicit") {
+        markers.push("explicit".into());
+    }
+    if lower.contains("hd") || lower.contains("hq") {
+        markers.push("hd/hq".into());
+    }
     markers
 }
 
@@ -312,14 +365,26 @@ mod tests {
     #[test]
     fn normalizes_pt2() {
         let n = normalize_title("The Heart Pt. 2");
-        assert_eq!(n.series_marker, Some(SeriesMarker { kind: SeriesKind::Part, value: 2 }));
+        assert_eq!(
+            n.series_marker,
+            Some(SeriesMarker {
+                kind: SeriesKind::Part,
+                value: 2
+            })
+        );
         assert!(n.base_title.contains("the heart"));
     }
 
     #[test]
     fn normalizes_part_ii() {
         let n = normalize_title("The Heart Part II");
-        assert_eq!(n.series_marker, Some(SeriesMarker { kind: SeriesKind::Part, value: 2 }));
+        assert_eq!(
+            n.series_marker,
+            Some(SeriesMarker {
+                kind: SeriesKind::Part,
+                value: 2
+            })
+        );
     }
 
     #[test]
@@ -366,6 +431,14 @@ mod tests {
     }
 
     #[test]
+    fn detects_chopped_not_slopped() {
+        let n = normalize_title("Threatz (Chopped Not Slopped)");
+        assert!(n
+            .negative_markers
+            .contains(&NegativeMarker::ChoppedNotSlopped));
+    }
+
+    #[test]
     fn base_title_strips_series() {
         let n = normalize_title("The Heart Part 2");
         assert_eq!(n.base_title, "the heart");
@@ -374,6 +447,12 @@ mod tests {
     #[test]
     fn vol3_detected() {
         let n = normalize_title("Tha Carter Vol. 3");
-        assert_eq!(n.series_marker, Some(SeriesMarker { kind: SeriesKind::Volume, value: 3 }));
+        assert_eq!(
+            n.series_marker,
+            Some(SeriesMarker {
+                kind: SeriesKind::Volume,
+                value: 3
+            })
+        );
     }
 }

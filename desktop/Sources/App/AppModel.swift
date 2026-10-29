@@ -15,6 +15,7 @@ final class AppModel {
     private var saveServices: [UUID: NeedleCLIService] = [:]
     var reviewQueue: ReviewQueue
     var discovery: DiscoveryStore
+    var bookmarks: BookmarkStore
     var isCancelling = false
     var isCheckingTools = false
     var tools: DoctorResponse?
@@ -37,6 +38,7 @@ final class AppModel {
         history = savedHistory
         reviewQueue = ReviewQueue(defaults: defaults, history: savedHistory)
         discovery = DiscoveryStore(defaults: defaults)
+        bookmarks = BookmarkStore(defaults: defaults)
         reviewQueue.onSaved = { [weak self] track, spotify in if spotify { self?.enqueue(track) } }
         recoverSpotifyJobs()
     }
@@ -157,11 +159,25 @@ final class AppModel {
         }
     }
 
-    func save(candidate: CandidateResult, queueSpotify: Bool) {
+    func prepareMetadata(candidate: CandidateResult, queueSpotify: Bool) async -> MetadataDraft? {
+        guard let snapshot = requestSnapshot, !isSearching, !isCheckingTools,
+              candidate.score.status != "rejected",
+              searchResults.contains(where: { $0.id == candidate.id && $0.candidate.url == candidate.candidate.url }) else { return nil }
+        let service = NeedleCLIService()
+        let result = await service.prepareMetadata(artist: snapshot.artist, title: snapshot.title, candidate: candidate.candidate, settings: snapshot.settings)
+        guard !Task.isCancelled, requestSnapshot == snapshot else { return nil }
+        switch result {
+        case .success(let draft): return draft
+        case .failure(let error): message = error.localizedDescription; return nil
+        }
+    }
+
+    func save(candidate: CandidateResult, queueSpotify: Bool, approved: MetadataDraft? = nil) {
         guard !isSearching, !isCheckingTools else { return }
         guard candidate.score.status != "rejected", let snapshot = requestSnapshot,
               searchResults.contains(where: { $0.id == candidate.id && $0.candidate.url == candidate.candidate.url }),
               Self.mediaURL(candidate.candidate.url) != nil,
+              approved?.sourceURL == candidate.candidate.url,
               selectedCandidateID != candidate.id else {
             message = "Choose an eligible recording from the current search."
             return
@@ -177,7 +193,7 @@ final class AppModel {
         destination = .activity
         message = nil
         Task { [self] in
-            let result = await downloadService.get(track: track, settings: snapshot.settings, onProgress: { [weak self] stage in
+            let result = await downloadService.get(track: track, settings: snapshot.settings, approved: approved, onProgress: { [weak self] stage in
                 Task { @MainActor in
                     guard let self, self.saveServices[track.id] != nil, let stage = JobStage.progress(stage),
                           var current = self.history.tracks.first(where: { $0.id == track.id }),

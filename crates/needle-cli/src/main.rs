@@ -1,9 +1,10 @@
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
-use anyhow::{Result, bail};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
-use std::time::Duration;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 use strsim::jaro_winkler;
 
 mod discovery;
@@ -60,6 +61,21 @@ enum Commands {
         /// Emit newline-delimited progress events on stderr
         #[arg(long)]
         events: bool,
+        #[arg(long)]
+        approved_tags: Option<String>,
+    },
+    /// Preview metadata for a selected source before downloading it
+    Prepare {
+        artist: String,
+        title: String,
+        #[arg(long)]
+        source_title: String,
+        #[arg(long)]
+        url: String,
+        #[arg(short, long)]
+        album: Option<String>,
+        #[arg(long)]
+        no_metadata: bool,
     },
     /// Search only, show candidates
     Search {
@@ -158,21 +174,108 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Get { artist, title, album, url, format, profile, json, no_metadata, duration_override, yes, strict, source, events } => {
-            cmd_get(artist, title, album, url, format, profile, json, no_metadata, duration_override, yes, strict, source, events).await
+        Commands::Get {
+            artist,
+            title,
+            album,
+            url,
+            format,
+            profile,
+            json,
+            no_metadata,
+            duration_override,
+            yes,
+            strict,
+            source,
+            events,
+            approved_tags,
+        } => {
+            cmd_get(GetOptions {
+                artist,
+                title,
+                album,
+                url,
+                format,
+                profile,
+                json,
+                no_metadata,
+                duration_override,
+                yes,
+                strict,
+                source,
+                events,
+                approved_tags_json: approved_tags,
+            })
+            .await
         }
-        Commands::Search { artist, title, album, url, no_metadata, duration_override, source, json } => {
-            cmd_search(artist, title, album, url, no_metadata, duration_override, source, json).await
+        Commands::Prepare {
+            artist,
+            title,
+            source_title,
+            url,
+            album,
+            no_metadata,
+        } => cmd_prepare(artist, title, source_title, url, album, no_metadata).await,
+        Commands::Search {
+            artist,
+            title,
+            album,
+            url,
+            no_metadata,
+            duration_override,
+            source,
+            json,
+        } => {
+            cmd_search(SearchOptions {
+                artist,
+                title,
+                album,
+                url,
+                no_metadata,
+                duration_override,
+                source,
+                json,
+            })
+            .await
         }
         Commands::Doctor { json } => cmd_doctor(json).await,
-        Commands::Inspect { path, artwork_dir, json } => cmd_inspect(path, artwork_dir, json),
-        Commands::Repair { path, artist, title, album, clear_album, album_artist, artwork, artwork_url, json } => {
-            cmd_repair(path, artist, title, album, clear_album, album_artist, artwork, artwork_url, json).await
+        Commands::Inspect {
+            path,
+            artwork_dir,
+            json,
+        } => cmd_inspect(path, artwork_dir, json),
+        Commands::Repair {
+            path,
+            artist,
+            title,
+            album,
+            clear_album,
+            album_artist,
+            artwork,
+            artwork_url,
+            json,
+        } => {
+            cmd_repair(
+                path,
+                artist,
+                title,
+                album,
+                clear_album,
+                album_artist,
+                artwork,
+                artwork_url,
+                json,
+            )
+            .await
         }
         Commands::RepairSuggestions { path, json } => cmd_repair_suggestions(path, json).await,
         Commands::IdentifyUrl { url, json } => cmd_identify_url(url, json),
         Commands::LibraryScan { root, json } => cmd_library_scan(root, json),
-        Commands::Discover { artist, source, json } => cmd_discover(&artist, &source, json),
+        Commands::Discover {
+            artist,
+            source,
+            json,
+        } => cmd_discover(&artist, &source, json),
     }
 }
 
@@ -211,9 +314,17 @@ fn cmd_library_scan(root: PathBuf, json: bool) -> Result<()> {
     if json {
         println!("{}", serde_json::to_string(&response)?);
     } else {
-        println!("Found {} audio files in {}", response.tracks.len(), root.display());
+        println!(
+            "Found {} audio files in {}",
+            response.tracks.len(),
+            root.display()
+        );
         for track in &response.tracks {
-            println!("{} — {}", track.artist.as_deref().unwrap_or("Unknown artist"), track.title.as_deref().unwrap_or("Unknown title"));
+            println!(
+                "{} — {}",
+                track.artist.as_deref().unwrap_or("Unknown artist"),
+                track.title.as_deref().unwrap_or("Unknown title")
+            );
         }
         for warning in &response.warnings {
             eprintln!("Warning: {warning}");
@@ -224,72 +335,170 @@ fn cmd_library_scan(root: PathBuf, json: bool) -> Result<()> {
 
 fn cmd_inspect(path: PathBuf, artwork_dir: Option<PathBuf>, json: bool) -> Result<()> {
     let inspected = needle_core::tag::inspect_tags(&path, artwork_dir.as_deref())?;
-    if json { println!("{}", serde_json::to_string(&serde_json::json!({"ok": true, "track": inspected}))?); }
-    else {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({"ok": true, "track": inspected}))?
+        );
+    } else {
         println!("{}", path.display());
-        println!("  {} — {}", inspected.artist.as_deref().unwrap_or("Unknown artist"), inspected.title.as_deref().unwrap_or("Unknown title"));
-        println!("  Album: {}", inspected.album.as_deref().unwrap_or("(none)"));
+        println!(
+            "  {} — {}",
+            inspected.artist.as_deref().unwrap_or("Unknown artist"),
+            inspected.title.as_deref().unwrap_or("Unknown title")
+        );
+        println!(
+            "  Album: {}",
+            inspected.album.as_deref().unwrap_or("(none)")
+        );
         println!("  Artwork: {}", inspected.artwork.len());
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn cmd_repair(path: PathBuf, artist: Option<String>, title: Option<String>, album: Option<String>, clear_album: bool, album_artist: Option<String>, artwork: Option<PathBuf>, artwork_url: Option<String>, json: bool) -> Result<()> {
-    if album.is_some() && clear_album { bail!("use either --album or --clear-album, not both"); }
-    if artwork_url.is_some() && artwork.is_some() { bail!("use either --artwork or --artwork-url, not both"); }
-    let mut artwork_data = artwork.map(|p| -> Result<Vec<u8>> { Ok(std::fs::read(p)?) }).transpose()?;
+async fn cmd_repair(
+    path: PathBuf,
+    artist: Option<String>,
+    title: Option<String>,
+    album: Option<String>,
+    clear_album: bool,
+    album_artist: Option<String>,
+    artwork: Option<PathBuf>,
+    artwork_url: Option<String>,
+    json: bool,
+) -> Result<()> {
+    if album.is_some() && clear_album {
+        bail!("use either --album or --clear-album, not both");
+    }
+    if artwork_url.is_some() && artwork.is_some() {
+        bail!("use either --artwork or --artwork-url, not both");
+    }
+    let mut artwork_data = artwork
+        .map(|p| -> Result<Vec<u8>> { Ok(std::fs::read(p)?) })
+        .transpose()?;
     let mut artwork_mime = None;
     if let Some(url) = artwork_url {
-        if !url.starts_with("https://") && !url.starts_with("http://") { bail!("artwork URL must use HTTP(S)"); }
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+        if !url.starts_with("https://") && !url.starts_with("http://") {
+            bail!("artwork URL must use HTTP(S)");
+        }
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
         let response = client.get(&url).send().await?.error_for_status()?;
-        if response.content_length().is_some_and(|length| length > 10 * 1024 * 1024) { bail!("artwork exceeds 10 MiB limit"); }
-        let content_type = response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(str::to_owned);
+        if response
+            .content_length()
+            .is_some_and(|length| length > 10 * 1024 * 1024)
+        {
+            bail!("artwork exceeds 10 MiB limit");
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
         artwork_mime = None;
-        if content_type.as_deref().is_some_and(|mime| !mime.to_ascii_lowercase().starts_with("image/")) { bail!("artwork URL did not return an image"); }
+        if content_type
+            .as_deref()
+            .is_some_and(|mime| !mime.to_ascii_lowercase().starts_with("image/"))
+        {
+            bail!("artwork URL did not return an image");
+        }
         let mut bytes = Vec::new();
         let mut response = response;
         while let Some(chunk) = response.chunk().await? {
-            if bytes.len().saturating_add(chunk.len()) > 10 * 1024 * 1024 { bail!("artwork exceeds 10 MiB limit"); }
+            if bytes.len().saturating_add(chunk.len()) > 10 * 1024 * 1024 {
+                bail!("artwork exceeds 10 MiB limit");
+            }
             bytes.extend_from_slice(&chunk);
         }
         artwork_data = Some(bytes);
     }
-    if artist.is_none() && title.is_none() && album.is_none() && !clear_album && album_artist.is_none() && artwork_data.is_none() {
+    if artist.is_none()
+        && title.is_none()
+        && album.is_none()
+        && !clear_album
+        && album_artist.is_none()
+        && artwork_data.is_none()
+    {
         bail!("provide at least one field to repair");
     }
-    let updated = needle_core::tag::repair_tags_with_backup(&path, &needle_core::tag::TagRepair { artist, title, album, clear_album, album_artist, artwork: artwork_data, artwork_mime })?;
-    if json { println!("{}", serde_json::to_string(&serde_json::json!({"ok": true, "track": updated.track, "backup_path": updated.backup_path}))?); }
-    else { println!("Repaired {}", path.display()); }
+    let updated = needle_core::tag::repair_tags_with_backup(
+        &path,
+        &needle_core::tag::TagRepair {
+            artist,
+            title,
+            album,
+            clear_album,
+            album_artist,
+            artwork: artwork_data,
+            artwork_mime,
+        },
+    )?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(
+                &serde_json::json!({"ok": true, "track": updated.track, "backup_path": updated.backup_path})
+            )?
+        );
+    } else {
+        println!("Repaired {}", path.display());
+    }
     Ok(())
 }
 
 async fn cmd_repair_suggestions(path: PathBuf, json: bool) -> Result<()> {
     let current = needle_core::tag::inspect_tags(&path, None)?;
-    let artist = current.artist.as_deref().ok_or_else(|| anyhow::anyhow!("file has no artist tag"))?;
-    let title = current.title.as_deref().ok_or_else(|| anyhow::anyhow!("file has no title tag"))?;
-    let metadata = needle_core::metadata::resolve_metadata(artist, title).await?.ok_or_else(|| anyhow::anyhow!("no authoritative metadata found"))?;
+    let artist = current
+        .artist
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("file has no artist tag"))?;
+    let title = current
+        .title
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("file has no title tag"))?;
+    let metadata = needle_core::metadata::resolve_metadata(artist, title)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no authoritative metadata found"))?;
     let warning = metadata_variant_warning(title, &metadata.title);
     let response = serde_json::json!({"ok": true, "path": path, "current": current, "suggestion": metadata, "warning": warning});
-    if json { println!("{}", response); } else { println!("Suggested: {} — {}", metadata.artist, metadata.title); }
+    if json {
+        println!("{}", response);
+    } else {
+        println!("Suggested: {} — {}", metadata.artist, metadata.title);
+    }
     Ok(())
 }
 
 fn cmd_identify_url(url: String, json: bool) -> Result<()> {
-    if !url.starts_with("https://") && !url.starts_with("http://") { bail!("source URL must use HTTP(S)"); }
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        bail!("source URL must use HTTP(S)");
+    }
     let toolchain = needle_core::Toolchain::discover()?;
-    let candidate = needle_core::search::resolve_url(toolchain.yt_dlp_path.to_str().unwrap(), &url)?
-        .ok_or_else(|| anyhow::anyhow!("source URL could not be resolved"))?;
+    let candidate =
+        needle_core::search::resolve_url(toolchain.yt_dlp_path.to_str().unwrap(), &url)?
+            .ok_or_else(|| anyhow::anyhow!("source URL could not be resolved"))?;
     let (artist, title, uncertain) = identify_candidate(&candidate);
     let response = serde_json::json!({"ok": true, "artist": artist, "title": title, "source_url": candidate.url, "uncertain": uncertain});
-    if json { println!("{}", response); }
-    else { println!("{} — {}", response["artist"].as_str().unwrap_or("Unknown artist"), response["title"].as_str().unwrap_or("Unknown title")); }
+    if json {
+        println!("{}", response);
+    } else {
+        println!(
+            "{} — {}",
+            response["artist"].as_str().unwrap_or("Unknown artist"),
+            response["title"].as_str().unwrap_or("Unknown title")
+        );
+    }
     Ok(())
 }
 
 fn identify_candidate(candidate: &needle_core::Candidate) -> (String, String, bool) {
-    let uploader = candidate.uploader.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "Unknown artist".into());
+    let uploader = candidate
+        .uploader
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "Unknown artist".into());
     let title = candidate.title.trim().to_owned();
     // Uploaders may be remixers or channels rather than the recording artist.
     // Use a conventional title prefix as a hint, retaining uncertainty whenever
@@ -299,14 +508,230 @@ fn identify_candidate(candidate: &needle_core::Candidate) -> (String, String, bo
             let artist = prefix.trim();
             let song = rest.trim();
             if !artist.is_empty() && !song.is_empty() {
-                return (artist.to_owned(), song.to_owned(), !artist.eq_ignore_ascii_case(uploader.trim()));
+                return (
+                    artist.to_owned(),
+                    song.to_owned(),
+                    !artist.eq_ignore_ascii_case(uploader.trim()),
+                );
             }
         }
     }
     (uploader, title, true)
 }
 
-async fn cmd_get(
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ApprovedTags {
+    artist: String,
+    title: String,
+    #[serde(default)]
+    album: String,
+    #[serde(default)]
+    album_artist: String,
+    #[serde(default)]
+    featured_artists: Vec<String>,
+    #[serde(default)]
+    artwork_url: String,
+    source_url: String,
+}
+
+fn parse_approved_tags(value: &str) -> Result<ApprovedTags> {
+    let tags: ApprovedTags = serde_json::from_str(value)
+        .map_err(|error| anyhow::anyhow!("invalid --approved-tags JSON: {error}"))?;
+    if tags.artist.trim().is_empty() || tags.title.trim().is_empty() {
+        bail!("approved tags must include non-empty artist and title");
+    }
+    if tags.source_url.trim().is_empty() {
+        bail!("approved tags must include source_url");
+    }
+    Ok(tags)
+}
+
+fn approved_tags_metadata(tags: &ApprovedTags) -> needle_core::TrackMetadata {
+    needle_core::TrackMetadata {
+        artist: tags.artist.clone(),
+        featured_artists: tags.featured_artists.clone(),
+        title: tags.title.clone(),
+        album: (!tags.album.trim().is_empty()).then(|| tags.album.clone()),
+        artwork_url: (!tags.artwork_url.trim().is_empty()).then(|| tags.artwork_url.clone()),
+        source: needle_core::metadata::MetadataSource {
+            provider: "approved".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+async fn download_approved_artwork(url: &str) -> Result<PathBuf> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        bail!("approved artwork URL must use HTTP(S)");
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    let response = client.get(url).send().await?.error_for_status()?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > 10 * 1024 * 1024)
+    {
+        bail!("approved artwork exceeds 10 MiB limit");
+    }
+    let declared = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let mut response = response;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len().saturating_add(chunk.len()) > 10 * 1024 * 1024 {
+            bail!("approved artwork exceeds 10 MiB limit");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let (mime, extension) = detect_artwork_type(&bytes)
+        .ok_or_else(|| anyhow::anyhow!("approved artwork URL did not return a recognized image"))?;
+    if !declared.is_empty()
+        && declared != mime
+        && !(mime == "image/jpeg" && declared == "image/jpg")
+    {
+        bail!("approved artwork MIME type {declared:?} does not match image bytes ({mime})");
+    }
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let path = std::env::temp_dir().join(format!("needle-approved-artwork-{nonce}.{extension}"));
+    std::fs::write(&path, &bytes)?;
+    Ok(path)
+}
+
+fn detect_artwork_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some(("image/jpeg", "jpg"))
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(("image/png", "png"))
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some(("image/gif", "gif"))
+    } else {
+        None
+    }
+}
+
+fn preview_title_with_features(
+    base: String,
+    source_title: &str,
+    featured_artists: &[String],
+) -> String {
+    if !featured_artists.is_empty() {
+        return format!(
+            "{base} (feat. {})",
+            normalize_featured_artists_list_pub(featured_artists)
+        );
+    }
+    let source = source_title
+        .split_once(" - ")
+        .map(|(_, title)| clean_title_fragment(title))
+        .unwrap_or_else(|| clean_title_fragment(source_title));
+    if source.to_ascii_lowercase().contains("(feat.") {
+        source
+    } else {
+        base
+    }
+}
+
+async fn cmd_prepare(
+    artist: String,
+    title: String,
+    source_title: String,
+    source_url: String,
+    album: Option<String>,
+    no_metadata: bool,
+) -> Result<()> {
+    if !(source_url.starts_with("https://") || source_url.starts_with("http://")) {
+        bail!("source URL must use http:// or https://");
+    }
+    let resolved = if no_metadata {
+        None
+    } else {
+        filter_compatible_metadata(
+            needle_core::metadata::resolve_metadata(&artist, &title).await?,
+            &artist,
+            &title,
+        )
+    };
+    let inferred_title = source_title_for_preview(&source_title, &artist);
+    let mut warnings = Vec::new();
+    let tags = if let Some(metadata) = resolved {
+        let conflict = requested_variant_conflicts_with_metadata(&title, &metadata.title);
+        if conflict {
+            warnings.push(metadata_variant_warning(&title, &metadata.title).unwrap_or("Metadata does not match the requested variant; source wording was retained.").to_string());
+        }
+        let mut tags =
+            metadata_for_tagging(Some(&metadata), &title, album.as_deref()).unwrap_or(metadata);
+        if conflict {
+            tags.artwork_url = None;
+            if !inferred_title.is_empty() {
+                tags.title = inferred_title.clone();
+            }
+        }
+        tags.title = preview_title_with_features(tags.title, &source_title, &tags.featured_artists);
+        tags
+    } else {
+        warnings.push(
+            "No compatible authoritative metadata found; review all fields before saving.".into(),
+        );
+        needle_core::TrackMetadata {
+            artist: artist.clone(),
+            title: inferred_title,
+            album: album.filter(|v| !v.trim().is_empty()),
+            source: needle_core::metadata::MetadataSource {
+                provider: "none".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    };
+    let response = serde_json::json!({
+        "artist": tags.artist, "title": tags.title, "album": tags.album.unwrap_or_default(),
+        "album_artist": tags.artist, "artwork_url": tags.artwork_url.unwrap_or_default(),
+        "source": tags.source.provider, "warnings": warnings, "source_url": source_url,
+    });
+    println!("{}", serde_json::to_string(&response)?);
+    Ok(())
+}
+
+fn source_title_for_preview(source_title: &str, artist: &str) -> String {
+    let candidate = source_title
+        .split_once(" - ")
+        .filter(|(prefix, _)| contains_or_close(prefix, artist, 0.86))
+        .map(|(_, title)| title)
+        .unwrap_or(source_title);
+    let variant = candidate
+        .find('(')
+        .and_then(|start| {
+            candidate[start + 1..]
+                .find(')')
+                .map(|end| candidate[start + 1..start + 1 + end].trim().to_owned())
+        })
+        .filter(|value| has_mix_variant(value));
+    let base = clean_title_fragment(candidate);
+    if let Some(variant) = variant {
+        if !base
+            .to_ascii_lowercase()
+            .contains(&variant.to_ascii_lowercase())
+        {
+            return format!("{base} ({variant})");
+        }
+    }
+    base
+}
+
+struct GetOptions {
     artist: String,
     title: String,
     album: Option<String>,
@@ -320,8 +745,31 @@ async fn cmd_get(
     strict: bool,
     source: String,
     events: bool,
-) -> Result<()> {
+    approved_tags_json: Option<String>,
+}
+
+async fn cmd_get(options: GetOptions) -> Result<()> {
+    let GetOptions {
+        artist,
+        title,
+        album,
+        url,
+        format,
+        profile,
+        json,
+        no_metadata,
+        duration_override,
+        yes,
+        strict,
+        source,
+        events,
+        approved_tags_json,
+    } = options;
     use needle_core::*;
+    let approved_tags = approved_tags_json
+        .as_deref()
+        .map(parse_approved_tags)
+        .transpose()?;
 
     let toolchain = Toolchain::discover()?;
     let direct_url_provided = url.is_some();
@@ -337,7 +785,9 @@ async fn cmd_get(
     // 1. Resolve metadata
     progress_event(events, "metadata");
     let pb = spinner("Resolving metadata...");
-    let metadata = if no_metadata {
+    let metadata = if let Some(ref tags) = approved_tags {
+        Some(approved_tags_metadata(tags))
+    } else if no_metadata {
         None
     } else {
         let resolved = metadata::resolve_metadata(&req.artist, &req.title).await?;
@@ -347,7 +797,8 @@ async fn cmd_get(
 
     if !json {
         if let Some(ref m) = metadata {
-            println!("{} {} — {}",
+            println!(
+                "{} {} — {}",
                 style("✓").green(),
                 style(&m.artist).bold(),
                 style(&m.title).bold()
@@ -359,14 +810,21 @@ async fn cmd_get(
                 println!("  Duration: {}", fmt_duration(dur));
             }
         } else {
-            println!("{} No metadata found — using request tags only", style("⚠").yellow());
+            println!(
+                "{} No metadata found — using request tags only",
+                style("⚠").yellow()
+            );
         }
     }
 
     // 2. Build queries + search
     progress_event(events, "search");
     let queries = search::build_queries(&req.artist, &req.title, req.album.as_deref());
-    let pb = spinner(if req.url.is_some() { "Resolving selected source..." } else { "Searching sources..." });
+    let pb = spinner(if req.url.is_some() {
+        "Resolving selected source..."
+    } else {
+        "Searching sources..."
+    });
     let mut candidates = resolve_requested_candidates(
         toolchain.yt_dlp_path.to_str().unwrap(),
         &queries,
@@ -377,12 +835,16 @@ async fn cmd_get(
 
     // 2b. If MB gave us a canonical URL, resolve it via yt-dlp and prepend as top candidate
     if req.url.is_none() {
-        if let Some(ref canonical_url) = metadata.as_ref().and_then(|m| m.source.canonical_url.clone()) {
+        if let Some(ref canonical_url) = metadata
+            .as_ref()
+            .and_then(|m| m.source.canonical_url.clone())
+        {
             let pb = spinner("Resolving canonical source URL...");
             match search::resolve_url(toolchain.yt_dlp_path.to_str().unwrap(), canonical_url) {
                 Ok(Some(canonical_candidate)) => {
                     if !json {
-                        println!("{} Canonical source: {} · {}",
+                        println!(
+                            "{} Canonical source: {} · {}",
                             style("✓").green(),
                             style(&canonical_candidate.title).bold(),
                             canonical_candidate.uploader.as_deref().unwrap_or("?"),
@@ -392,14 +854,20 @@ async fn cmd_get(
                     candidates.insert(0, canonical_candidate);
                 }
                 Ok(None) => {}
-                Err(e) => { eprintln!("[debug] canonical URL resolve failed: {e}"); }
+                Err(e) => {
+                    eprintln!("[debug] canonical URL resolve failed: {e}");
+                }
             }
             pb.finish_and_clear();
         }
     }
 
     if !json {
-        println!("{} Found {} candidates\n", style("✓").green(), candidates.len());
+        println!(
+            "{} Found {} candidates\n",
+            style("✓").green(),
+            candidates.len()
+        );
     }
 
     if candidates.is_empty() {
@@ -424,7 +892,7 @@ async fn cmd_get(
         })
         .collect();
 
-    scored.sort_by(|a, b| b.1.confidence.cmp(&a.1.confidence));
+    scored.sort_by_key(|a| std::cmp::Reverse(a.1.confidence));
 
     // 4. Display
     if !json {
@@ -439,6 +907,11 @@ async fn cmd_get(
     };
     let (selected, selected_score) = &scored[selection];
     guard_selected_candidate(strict, selected_score)?;
+    if let Some(ref approved) = approved_tags {
+        if approved.source_url != selected.url {
+            bail!("approved metadata source_url does not match selected source URL");
+        }
+    }
 
     if !json {
         println!("\nDownloading: {}\n", style(&selected.title).bold());
@@ -448,34 +921,51 @@ async fn cmd_get(
     //     re-query with the clean inferred title extracted from the selected source.
     //     This handles mixtapes/singles where raw request title differs from canonical.
     let mut meta_re_queried = false;
-    let metadata = if !no_metadata {
+    let metadata = if approved_tags.is_some() {
+        metadata
+    } else if !no_metadata {
         let inferred_clean = infer_title_from_source_title(&selected.title, &req.artist);
         let needs_upgrade = metadata.as_ref().map(|m| m.album.is_none()).unwrap_or(true);
         if needs_upgrade {
             if let Some(clean_title) = inferred_clean.as_deref() {
                 if clean_title != req.title {
                     let pb = spinner("Re-resolving metadata with inferred title...");
-                    let upgraded = metadata::resolve_metadata(&req.artist, clean_title).await
+                    let upgraded = metadata::resolve_metadata(&req.artist, clean_title)
+                        .await
                         .ok()
                         .flatten()
-                        .and_then(|m| filter_compatible_metadata(Some(m), &req.artist, clean_title));
+                        .and_then(|m| {
+                            filter_compatible_metadata(Some(m), &req.artist, clean_title)
+                        });
                     pb.finish_and_clear();
                     if let Some(ref m) = upgraded {
                         meta_re_queried = true;
                         if !json {
-                            println!("{} Upgraded metadata: {} — {}{}",
+                            println!(
+                                "{} Upgraded metadata: {} — {}{}",
                                 style("✓").green(),
                                 style(&m.artist).bold(),
                                 style(&m.title).bold(),
-                                m.album.as_deref().map(|a| format!(" ({})", a)).unwrap_or_default(),
+                                m.album
+                                    .as_deref()
+                                    .map(|a| format!(" ({})", a))
+                                    .unwrap_or_default(),
                             );
                         }
                     }
                     upgraded.or(metadata)
-                } else { metadata }
-            } else { metadata }
-        } else { metadata }
-    } else { metadata };
+                } else {
+                    metadata
+                }
+            } else {
+                metadata
+            }
+        } else {
+            metadata
+        }
+    } else {
+        metadata
+    };
 
     // 6. Download
     progress_event(events, "download");
@@ -490,10 +980,7 @@ async fn cmd_get(
     };
 
     let pb = spinner("Downloading audio...");
-    let downloaded = download::download_audio(
-        toolchain.yt_dlp_path.to_str().unwrap(),
-        &plan,
-    )?;
+    let downloaded = download::download_audio(toolchain.yt_dlp_path.to_str().unwrap(), &plan)?;
     pb.finish_and_clear();
 
     // 7. Convert
@@ -516,8 +1003,23 @@ async fn cmd_get(
     let remix_variant_conflict = metadata
         .as_ref()
         .is_some_and(|m| requested_variant_conflicts_with_metadata(&req.title, &m.title));
-    let tag_metadata = metadata_for_tagging(metadata.as_ref(), &req.title, req.album.as_deref());
-    let fallback_album = if remix_variant_conflict {
+    let tag_metadata = if approved_tags.is_some() {
+        metadata.clone()
+    } else {
+        metadata_for_tagging(metadata.as_ref(), &req.title, req.album.as_deref())
+    };
+    let approved_artwork_path = if let Some(ref approved) = approved_tags {
+        if approved.artwork_url.trim().is_empty() {
+            None
+        } else {
+            Some(download_approved_artwork(&approved.artwork_url).await?)
+        }
+    } else {
+        None
+    };
+    let fallback_album = if let Some(ref approved) = approved_tags {
+        (!approved.album.trim().is_empty()).then(|| approved.album.clone())
+    } else if remix_variant_conflict {
         req.album.clone()
     } else {
         tag_metadata
@@ -531,32 +1033,62 @@ async fn cmd_get(
     // Build canonical title: use metadata title, append (feat. X & Y) if featured_artists present
     let meta_title_raw = tag_metadata.as_ref().map(|m| {
         let base = m.title.clone();
-        if m.featured_artists.is_empty() { base }
-        else {
+        if m.featured_artists.is_empty() {
+            base
+        } else {
             let feats = normalize_featured_artists_list_pub(&m.featured_artists);
             format!("{} (feat. {})", base, feats)
         }
     });
-    let fallback_title = meta_title_raw
-        .unwrap_or_else(|| infer_title_from_source_title(&selected.title, &req.artist)
-            .unwrap_or_else(|| title_case_fallback(&req.title)));
-    let fallback_artist = tag_metadata.as_ref()
-        .map(|m| m.artist.clone())
-        .unwrap_or_else(|| title_case_fallback(&req.artist));
+    let fallback_title = approved_tags
+        .as_ref()
+        .map(|tags| tags.title.clone())
+        .unwrap_or_else(|| {
+            meta_title_raw.unwrap_or_else(|| {
+                infer_title_from_source_title(&selected.title, &req.artist)
+                    .unwrap_or_else(|| title_case_fallback(&req.title))
+            })
+        });
+    let fallback_artist = approved_tags
+        .as_ref()
+        .map(|tags| tags.artist.clone())
+        .unwrap_or_else(|| {
+            tag_metadata
+                .as_ref()
+                .map(|m| m.artist.clone())
+                .unwrap_or_else(|| title_case_fallback(&req.artist))
+        });
 
     let library_artist = canonical_library_artist(tag_metadata.as_ref(), &req.artist);
+    let approved_album_artist = approved_tags.as_ref().map(|tags| tags.album_artist.clone());
     let tag_plan = tag::TagPlan {
         title: fallback_title,
         artist: fallback_artist,
         album: fallback_album,
-        album_artist: Some(library_artist.to_string()),
-        track: tag_metadata.as_ref().and_then(|m| m.track_number),
-        disc: tag_metadata.as_ref().and_then(|m| m.disc_number),
-        date: tag_metadata.as_ref().and_then(|m| m.release_date.clone()),
+        album_artist: approved_album_artist.or_else(|| Some(library_artist.to_string())),
+        track: if approved_tags.is_some() {
+            None
+        } else {
+            tag_metadata.as_ref().and_then(|m| m.track_number)
+        },
+        disc: if approved_tags.is_some() {
+            None
+        } else {
+            tag_metadata.as_ref().and_then(|m| m.disc_number)
+        },
+        date: if approved_tags.is_some() {
+            None
+        } else {
+            tag_metadata.as_ref().and_then(|m| m.release_date.clone())
+        },
+        artwork_path: approved_artwork_path.clone(),
         source_url: Some(selected.url.clone()),
         ..Default::default()
     };
     tag::write_tags(&converted, &tag_plan)?;
+    if let Some(path) = approved_artwork_path {
+        let _ = std::fs::remove_file(path);
+    }
     pb.finish_and_clear();
 
     // 9. Move to library
@@ -581,15 +1113,18 @@ async fn cmd_get(
     );
     let Some(out_path) = library::resolve_destination(&out_path, profile.collision)? else {
         if json {
-            println!("{}", serde_json::to_string(&serde_json::json!({
-                "ok": true,
-                "skipped": true,
-                "saved_path": out_path,
-                "artist": tag_plan.artist,
-                "title": tag_plan.title,
-                "album": tag_plan.album,
-                "source_url": &selected.url,
-            }))?);
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({
+                    "ok": true,
+                    "skipped": true,
+                    "saved_path": out_path,
+                    "artist": tag_plan.artist,
+                    "title": tag_plan.title,
+                    "album": tag_plan.album,
+                    "source_url": &selected.url,
+                }))?
+            );
         } else {
             println!(
                 "{} skipped existing file: {}",
@@ -623,15 +1158,25 @@ async fn cmd_get(
             reasons: selected_score.positives.clone(),
         },
         metadata: provenance::MetadataRecord {
-            provider: metadata.as_ref().map(|m| m.source.provider.clone()).unwrap_or_else(|| "none".into()),
+            provider: metadata
+                .as_ref()
+                .map(|m| m.source.provider.clone())
+                .unwrap_or_else(|| "none".into()),
             plausibility_score: metadata.as_ref().map(|m| m.source.plausibility_score),
-            recording_id: metadata.as_ref().and_then(|m| m.source.recording_id.clone()),
+            recording_id: metadata
+                .as_ref()
+                .and_then(|m| m.source.recording_id.clone()),
             resolved_artist: metadata.as_ref().map(|m| m.artist.clone()),
             resolved_title: metadata.as_ref().map(|m| m.title.clone()),
             resolved_album: metadata.as_ref().and_then(|m| m.album.clone()),
-            featured_artists: metadata.as_ref().map(|m| m.featured_artists.clone()).unwrap_or_default(),
+            featured_artists: metadata
+                .as_ref()
+                .map(|m| m.featured_artists.clone())
+                .unwrap_or_default(),
             re_queried: meta_re_queried,
-            canonical_url: metadata.as_ref().and_then(|m| m.source.canonical_url.clone()),
+            canonical_url: metadata
+                .as_ref()
+                .and_then(|m| m.source.canonical_url.clone()),
         },
         created_by: "needle 0.1.0".into(),
     };
@@ -639,14 +1184,17 @@ async fn cmd_get(
     prov.write(&prov_path)?;
 
     if json {
-        println!("{}", serde_json::to_string(&serde_json::json!({
-            "ok": true,
-            "saved_path": out_path,
-            "artist": tag_plan.artist,
-            "title": tag_plan.title,
-            "album": tag_plan.album,
-            "source_url": &selected.url,
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "ok": true,
+                "saved_path": out_path,
+                "artist": tag_plan.artist,
+                "title": tag_plan.title,
+                "album": tag_plan.album,
+                "source_url": &selected.url,
+            }))?
+        );
     } else {
         println!("\n{} Saved: {}", style("✓").green(), out_path.display());
     }
@@ -654,7 +1202,7 @@ async fn cmd_get(
     Ok(())
 }
 
-async fn cmd_search(
+struct SearchOptions {
     artist: String,
     title: String,
     album: Option<String>,
@@ -663,7 +1211,19 @@ async fn cmd_search(
     duration_override: Option<String>,
     source: String,
     json: bool,
-) -> Result<()> {
+}
+
+async fn cmd_search(options: SearchOptions) -> Result<()> {
+    let SearchOptions {
+        artist,
+        title,
+        album,
+        url,
+        no_metadata,
+        duration_override,
+        source,
+        json,
+    } = options;
     use needle_core::*;
 
     let toolchain = Toolchain::discover()?;
@@ -707,9 +1267,12 @@ async fn cmd_search(
         })
         .collect();
 
-    scored.sort_by(|a, b| b.1.confidence.cmp(&a.1.confidence));
+    scored.sort_by_key(|a| std::cmp::Reverse(a.1.confidence));
     if json {
-        println!("{}", serde_json::to_string(&search_json_response(&req, metadata.as_ref(), &scored))?);
+        println!(
+            "{}",
+            serde_json::to_string(&search_json_response(&req, metadata.as_ref(), &scored))?
+        );
     } else {
         display_candidates(&scored, &req, metadata.as_ref(), expected_dur);
     }
@@ -754,9 +1317,19 @@ async fn cmd_doctor(json: bool) -> Result<()> {
 
     for status in tc.verify()? {
         if status.optional && status.path.is_none() {
-            println!("{} {:20} {}", style("•").yellow(), status.name, status.message);
+            println!(
+                "{} {:20} {}",
+                style("•").yellow(),
+                status.name,
+                status.message
+            );
         } else if status.ok {
-            println!("{} {:20} {}", style("✓").green(), status.name, status.message);
+            println!(
+                "{} {:20} {}",
+                style("✓").green(),
+                status.name,
+                status.message
+            );
         } else {
             println!("{} {:20} {}", style("✗").red(), status.name, status.message);
         }
@@ -770,11 +1343,15 @@ async fn cmd_doctor(json: bool) -> Result<()> {
 fn search_json_response(
     req: &needle_core::ParsedRequest,
     metadata: Option<&needle_core::TrackMetadata>,
-    scored: &[(needle_core::search::Candidate, needle_core::score::CandidateScore)],
+    scored: &[(
+        needle_core::search::Candidate,
+        needle_core::score::CandidateScore,
+    )],
 ) -> serde_json::Value {
-    let candidates: Vec<_> = scored.iter().map(|(candidate, score)| {
-        serde_json::json!({ "candidate": candidate, "score": score })
-    }).collect();
+    let candidates: Vec<_> = scored
+        .iter()
+        .map(|(candidate, score)| serde_json::json!({ "candidate": candidate, "score": score }))
+        .collect();
     serde_json::json!({
         "ok": true,
         "request": {
@@ -788,32 +1365,50 @@ fn search_json_response(
 }
 
 fn display_candidates(
-    scored: &[(needle_core::search::Candidate, needle_core::score::CandidateScore)],
+    scored: &[(
+        needle_core::search::Candidate,
+        needle_core::score::CandidateScore,
+    )],
     req: &needle_core::ParsedRequest,
     metadata: Option<&needle_core::TrackMetadata>,
     expected_duration_ms: Option<u64>,
 ) {
-    println!("Requested: {} — {}", style(&req.artist).bold(), style(&req.title).bold());
+    println!(
+        "Requested: {} — {}",
+        style(&req.artist).bold(),
+        style(&req.title).bold()
+    );
     if let Some(dur) = expected_duration_ms {
         println!("Expected duration: {}", fmt_duration(dur));
     } else if let Some(m) = metadata {
-        if let Some(dur) = m.duration_ms { println!("Expected duration: {}", fmt_duration(dur)); }
+        if let Some(dur) = m.duration_ms {
+            println!("Expected duration: {}", fmt_duration(dur));
+        }
     }
     println!();
 
-    let groups = [("Recommended", needle_core::score::ScoreStatus::Recommended),
-                  ("Uncertain", needle_core::score::ScoreStatus::Uncertain),
-                  ("Rejected", needle_core::score::ScoreStatus::Rejected)];
+    let groups = [
+        ("Recommended", needle_core::score::ScoreStatus::Recommended),
+        ("Uncertain", needle_core::score::ScoreStatus::Uncertain),
+        ("Rejected", needle_core::score::ScoreStatus::Rejected),
+    ];
 
     for (label, status) in groups {
-        let group: Vec<_> = scored.iter().enumerate()
+        let group: Vec<_> = scored
+            .iter()
+            .enumerate()
             .filter(|(_, (_, s))| s.status == status)
             .collect();
-        if group.is_empty() { continue; }
+        if group.is_empty() {
+            continue;
+        }
 
         println!("{}", style(label).bold().underlined());
         for (i, (cand, score)) in group {
-            let dur = cand.duration_ms.map(fmt_duration).unwrap_or_else(|| "??:??".into());
+            let dur = cand
+                .duration_ms
+                .map(fmt_duration)
+                .unwrap_or_else(|| "??:??".into());
             let up = cand.uploader.as_deref().unwrap_or("unknown");
             let conf = style(format!("{:3}", score.confidence));
             let conf_styled = match status {
@@ -822,12 +1417,28 @@ fn display_candidates(
                 needle_core::score::ScoreStatus::Rejected => conf.red(),
             };
 
-            println!("  [{}] {}%  {}", i + 1, conf_styled, style(&cand.title).bold());
+            println!(
+                "  [{}] {}%  {}",
+                i + 1,
+                conf_styled,
+                style(&cand.title).bold()
+            );
             let quality = cand.source_quality_label();
             if let Some(quality) = quality {
-                println!("      {} · {} · {} · {}", dur, style(&cand.provider).dim(), style(up).dim(), style(quality).dim());
+                println!(
+                    "      {} · {} · {} · {}",
+                    dur,
+                    style(&cand.provider).dim(),
+                    style(up).dim(),
+                    style(quality).dim()
+                );
             } else {
-                println!("      {} · {} · {}", dur, style(&cand.provider).dim(), style(up).dim());
+                println!(
+                    "      {} · {} · {}",
+                    dur,
+                    style(&cand.provider).dim(),
+                    style(up).dim()
+                );
             }
             for p in &score.positives {
                 println!("      {} {}", style("+").green(), p);
@@ -844,12 +1455,17 @@ fn display_candidates(
 }
 
 fn select_candidate(
-    scored: &[(needle_core::search::Candidate, needle_core::score::CandidateScore)],
+    scored: &[(
+        needle_core::search::Candidate,
+        needle_core::score::CandidateScore,
+    )],
     direct_url_provided: bool,
 ) -> Result<usize> {
     use dialoguer::Input;
 
-    let valid: Vec<usize> = scored.iter().enumerate()
+    let valid: Vec<usize> = scored
+        .iter()
+        .enumerate()
         .filter(|(_, (_, s))| s.status != needle_core::score::ScoreStatus::Rejected)
         .map(|(i, _)| i)
         .collect();
@@ -888,11 +1504,16 @@ fn select_candidate(
 }
 
 fn auto_select_candidate(
-    scored: &[(needle_core::search::Candidate, needle_core::score::CandidateScore)],
+    scored: &[(
+        needle_core::search::Candidate,
+        needle_core::score::CandidateScore,
+    )],
     direct_url_provided: bool,
     quiet: bool,
 ) -> Result<usize> {
-    let Some((idx, (candidate, score))) = scored.iter().enumerate()
+    let Some((idx, (candidate, score))) = scored
+        .iter()
+        .enumerate()
         .find(|(_, (_, s))| s.status != needle_core::score::ScoreStatus::Rejected)
     else {
         if direct_url_provided {
@@ -947,9 +1568,11 @@ fn guard_selected_candidate(
 
 fn spinner(msg: &str) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
-    pb.set_style(ProgressStyle::default_spinner()
-        .template("{spinner:.green} {msg}")
-        .unwrap());
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
+    );
     pb.set_message(msg.to_string());
     pb.enable_steady_tick(Duration::from_millis(100));
     pb
@@ -957,7 +1580,10 @@ fn spinner(msg: &str) -> ProgressBar {
 
 fn progress_event(enabled: bool, stage: &str) {
     if enabled {
-        eprintln!("{}", serde_json::json!({ "event": "progress", "stage": stage }));
+        eprintln!(
+            "{}",
+            serde_json::json!({ "event": "progress", "stage": stage })
+        );
     }
 }
 
@@ -969,9 +1595,13 @@ fn fmt_duration(ms: u64) -> String {
 }
 
 fn parse_duration_override(value: Option<&str>) -> Result<Option<u64>> {
-    let Some(value) = value else { return Ok(None); };
+    let Some(value) = value else {
+        return Ok(None);
+    };
     let value = value.trim();
-    if value.is_empty() { return Ok(None); }
+    if value.is_empty() {
+        return Ok(None);
+    }
 
     let seconds = if let Some((minutes, seconds)) = value.split_once(':') {
         let minutes: u64 = minutes.parse()?;
@@ -996,7 +1626,11 @@ fn choose_expected_duration(
     match (metadata_duration, consensus_duration) {
         (Some(metadata), Some(consensus)) => {
             let delta = metadata.abs_diff(consensus);
-            if delta > 30_000 { Some(consensus) } else { Some(metadata) }
+            if delta > 30_000 {
+                Some(consensus)
+            } else {
+                Some(metadata)
+            }
         }
         (None, Some(consensus)) => Some(consensus),
         (Some(metadata), None) => Some(metadata),
@@ -1040,7 +1674,6 @@ fn metadata_for_tagging(
     if requested_variant_conflicts_with_metadata(request_title, &metadata.title) {
         metadata.title = clean_title_fragment(request_title);
         metadata.album = request_album.map(str::to_owned);
-        metadata.featured_artists.clear();
         metadata.track_number = None;
         metadata.disc_number = None;
         metadata.release_date = None;
@@ -1061,7 +1694,11 @@ fn filter_compatible_metadata(
         .any(|artist| contains_or_close(artist, request_artist, 0.86));
     let artist_ok = primary_artist_ok || featured_artist_ok;
     let title_ok = contains_or_close(&metadata.title, request_title, 0.90)
-        || contains_or_close(&normalize_for_metadata_match(&metadata.title), &normalize_for_metadata_match(request_title), 0.90);
+        || contains_or_close(
+            &normalize_for_metadata_match(&metadata.title),
+            &normalize_for_metadata_match(request_title),
+            0.90,
+        );
 
     if artist_ok && title_ok {
         Some(metadata)
@@ -1101,13 +1738,17 @@ fn infer_album_from_source_title(source_title: &str) -> Option<String> {
     collect_bracketed_segments(source_title, '(', ')', &mut candidates);
     collect_bracketed_segments(source_title, '[', ']', &mut candidates);
 
-    candidates.into_iter()
+    candidates
+        .into_iter()
         .map(|s| s.trim().to_string())
         .find(|s| is_likely_album_hint(s))
 }
 
 fn infer_album_from_scored_candidates(
-    scored: &[(needle_core::search::Candidate, needle_core::score::CandidateScore)],
+    scored: &[(
+        needle_core::search::Candidate,
+        needle_core::score::CandidateScore,
+    )],
 ) -> Option<String> {
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     for (candidate, score) in scored {
@@ -1120,7 +1761,8 @@ fn infer_album_from_scored_candidates(
     }
 
     // Require at least 2 votes — single noisy candidate not trustworthy
-    counts.into_iter()
+    counts
+        .into_iter()
         .filter(|(_, count)| *count >= 2)
         .max_by_key(|(_, count)| *count)
         .map(|(album, _)| album)
@@ -1128,7 +1770,11 @@ fn infer_album_from_scored_candidates(
 
 fn infer_title_from_source_title(source_title: &str, request_artist: &str) -> Option<String> {
     let cleaned = strip_bracketed_noise(source_title);
-    let parts: Vec<_> = cleaned.split(" - ").map(str::trim).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<_> = cleaned
+        .split(" - ")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
     if parts.len() >= 2 {
         let req_artist_norm = normalize_for_metadata_match(request_artist);
         let first_norm = normalize_for_metadata_match(parts[0]);
@@ -1164,14 +1810,13 @@ fn strip_bracketed_noise(source_title: &str) -> String {
     let mut out = source_title.to_string();
     // Also strip curly-brace segments (common in SoundCloud tags like {#!.!.!#})
     for (open, close) in [('(', ')'), ('[', ']'), ('{', '}')] {
-        loop {
-            let Some(start) = out.find(open) else { break; };
-            let Some(end_rel) = out[start + open.len_utf8()..].find(close) else { break; };
+        while let Some(start) = out.find(open) {
+            let Some(end_rel) = out[start + open.len_utf8()..].find(close) else {
+                break;
+            };
             let end = start + open.len_utf8() + end_rel;
             let segment = &out[start + open.len_utf8()..end];
-            if is_likely_album_hint(segment) {
-                out.replace_range(start..=end, "");
-            } else if is_title_noise(segment) {
+            if is_likely_album_hint(segment) || is_title_noise(segment) {
                 out.replace_range(start..=end, "");
             } else {
                 break;
@@ -1185,10 +1830,17 @@ fn clean_title_fragment(value: &str) -> String {
     let mut title = value.trim().to_string();
     // Strip phrase-level noise first (order matters: longer phrases before subwords)
     let phrase_markers = [
-        "with lyrics!", "with lyrics", "w/ lyrics",
-        "▼download▼", "download",
-        "lyric video", "lyrics", "lyric",
-        "official audio", "official video", "official music video",
+        "with lyrics!",
+        "with lyrics",
+        "w/ lyrics",
+        "▼download▼",
+        "download",
+        "lyric video",
+        "lyrics",
+        "lyric",
+        "official audio",
+        "official video",
+        "official music video",
         "audio only",
     ];
     for marker in phrase_markers {
@@ -1207,8 +1859,14 @@ fn clean_title_fragment(value: &str) -> String {
     let title = normalize_feat_in_parens(&title);
     let title = normalize_feat_syntax(&title);
     // Strip trailing junk punctuation left by removals
-    let title = title.trim_end_matches(|c: char| c == '!' || c == ',' || c == '.' || c == '-' || c == '/');
-    title.split_whitespace().collect::<Vec<_>>().join(" ").trim_matches('-').trim().to_string()
+    let title = title.trim_end_matches(['!', ',', '.', '-', '/']);
+    title
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches('-')
+        .trim()
+        .to_string()
 }
 
 /// Remove bracket pairs that are empty (or whitespace-only) after other
@@ -1222,7 +1880,9 @@ fn collapse_empty_brackets(value: &str) -> String {
             let mut search_from = 0;
             while let Some(rel_start) = out[search_from..].find(open) {
                 let start = search_from + rel_start;
-                let Some(rel_end) = out[start + open.len_utf8()..].find(close) else { break; };
+                let Some(rel_end) = out[start + open.len_utf8()..].find(close) else {
+                    break;
+                };
                 let end = start + open.len_utf8() + rel_end;
                 let segment = &out[start + open.len_utf8()..end];
                 if segment.trim().is_empty() {
@@ -1248,7 +1908,14 @@ fn collapse_empty_brackets(value: &str) -> String {
 fn normalize_feat_in_parens(value: &str) -> String {
     let lower = value.to_ascii_lowercase();
     // Find "(ft." or "(feat" or "(featuring" patterns
-    let paren_variants = ["(featuring ", "(featured ", "(feat. ", "(feat ", "(ft. ", "(ft "];
+    let paren_variants = [
+        "(featuring ",
+        "(featured ",
+        "(feat. ",
+        "(feat ",
+        "(ft. ",
+        "(ft ",
+    ];
     for variant in paren_variants {
         if let Some(pos) = lower.find(variant) {
             let after_start = pos + variant.len();
@@ -1271,7 +1938,14 @@ fn normalize_feat_syntax(value: &str) -> String {
     //   " ft. ", " ft ", " feat ", " feat. ", " featuring ", " Feat. ", etc.
     let lower = value.to_ascii_lowercase();
 
-    let variants = [" featuring ", " featured ", " feat ", " feat. ", " ft. ", " ft "];
+    let variants = [
+        " featuring ",
+        " featured ",
+        " feat ",
+        " feat. ",
+        " ft. ",
+        " ft ",
+    ];
     for variant in variants {
         if let Some(pos) = lower.find(variant) {
             let before = value[..pos].trim_end().to_string();
@@ -1296,7 +1970,11 @@ fn normalize_featured_artists_list(artists: &str) -> String {
     // "Ab-Soul and Punch" → "Ab-Soul & Punch"
     // Single artist: unchanged
     let normalized = artists.replace(" and ", ", ").replace(" & ", ", ");
-    let parts: Vec<&str> = normalized.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = normalized
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
     match parts.len() {
         0 => artists.to_string(),
         1 => parts[0].to_string(),
@@ -1319,8 +1997,21 @@ fn strip_trailing_paren_if_unmatched(value: &str) -> String {
 fn is_title_noise(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     // Exact matches
-    if ["lyrics", "lyric", "official audio", "official video", "audio", "video", "hq", "hd", "clean", "explicit"]
-        .iter().any(|marker| normalized == *marker) {
+    if [
+        "lyrics",
+        "lyric",
+        "official audio",
+        "official video",
+        "audio",
+        "video",
+        "hq",
+        "hd",
+        "clean",
+        "explicit",
+    ]
+    .iter()
+    .any(|marker| normalized == *marker)
+    {
         return true;
     }
     // Suffix patterns: anything ending in "mix" or "remix" is a remix variant, not the track
@@ -1330,10 +2021,15 @@ fn is_title_noise(value: &str) -> bool {
     // Compound bracket phrases composed entirely of noise words, e.g.
     // "Music Video", "Official Music Video", "Audio HQ", "HD Video", etc.
     let words: Vec<&str> = normalized.split_whitespace().collect();
-    if words.len() >= 2 && words.iter().all(|w| {
-        ["official", "audio", "video", "music", "lyrics", "lyric", "hq", "hd", "clean", "explicit"]
+    if words.len() >= 2
+        && words.iter().all(|w| {
+            [
+                "official", "audio", "video", "music", "lyrics", "lyric", "hq", "hd", "clean",
+                "explicit",
+            ]
             .contains(w)
-    }) {
+        })
+    {
         return true;
     }
     false
@@ -1376,7 +2072,9 @@ fn collect_bracketed_segments(input: &str, open: char, close: char, out: &mut Ve
     let mut rest = input;
     while let Some(start) = rest.find(open) {
         let after_open = &rest[start + open.len_utf8()..];
-        let Some(end) = after_open.find(close) else { break; };
+        let Some(end) = after_open.find(close) else {
+            break;
+        };
         out.push(after_open[..end].to_string());
         rest = &after_open[end + close.len_utf8()..];
     }
@@ -1392,17 +2090,50 @@ fn is_likely_album_hint(value: &str) -> bool {
         return false;
     }
     // Reject if contains special chars typical of SoundCloud junk tags or emoji separators
-    if value.chars().any(|c| matches!(c, '#' | '!' | '{' | '}' | '|' | '~' | '@')) {
+    if value
+        .chars()
+        .any(|c| matches!(c, '#' | '!' | '{' | '}' | '|' | '~' | '@'))
+    {
         return false;
     }
 
     let junk = [
-        "official", "audio", "lyrics", "lyric", "video", "hq", "hd", "clean",
-        "explicit", "feat", "ft", "featuring", "prod", "remix", "mix", "download",
+        "official",
+        "audio",
+        "lyrics",
+        "lyric",
+        "video",
+        "hq",
+        "hd",
+        "clean",
+        "explicit",
+        "feat",
+        "ft",
+        "featuring",
+        "prod",
+        "remix",
+        "mix",
+        "download",
         // Descriptive suffixes that appear in YouTube titles but never in real album names
-        "song", "music", "track", "freestyle", "edit", "cover", "live", "leak",
-        "reaction", "interview", "snippet", "session", "performance", "visualizer",
-        "slowed", "reverb", "chopped", "sped up", "bass boosted",
+        "song",
+        "music",
+        "track",
+        "freestyle",
+        "edit",
+        "cover",
+        "live",
+        "leak",
+        "reaction",
+        "interview",
+        "snippet",
+        "session",
+        "performance",
+        "visualizer",
+        "slowed",
+        "reverb",
+        "chopped",
+        "sped up",
+        "bass boosted",
     ];
     !junk.iter().any(|marker| normalized.contains(marker))
 }
@@ -1435,7 +2166,9 @@ fn resolve_requested_candidates(
     if let Some(url) = direct_url {
         return needle_core::search::resolve_url(yt_dlp_path, url)?
             .map(|candidate| vec![candidate])
-            .ok_or_else(|| anyhow::anyhow!("selected URL did not resolve to a supported audio source"));
+            .ok_or_else(|| {
+                anyhow::anyhow!("selected URL did not resolve to a supported audio source")
+            });
     }
 
     needle_core::search::search_sources(yt_dlp_path, queries, 10, source)
@@ -1450,7 +2183,16 @@ mod tests {
     fn structured_cli_flags_parse_without_changing_defaults() {
         let cli = Cli::try_parse_from(["needle", "search", "Artist", "Title", "--json"]).unwrap();
         match cli.command {
-            Commands::Search { artist, title, album, url, no_metadata, duration_override, source, json } => {
+            Commands::Search {
+                artist,
+                title,
+                album,
+                url,
+                no_metadata,
+                duration_override,
+                source,
+                json,
+            } => {
                 assert_eq!(artist, "Artist");
                 assert_eq!(title, "Title");
                 assert!(album.is_none());
@@ -1465,7 +2207,12 @@ mod tests {
 
         let cli = Cli::try_parse_from(["needle", "get", "Artist", "Title", "--events"]).unwrap();
         match cli.command {
-            Commands::Get { json, events, source, .. } => {
+            Commands::Get {
+                json,
+                events,
+                source,
+                ..
+            } => {
                 assert!(!json);
                 assert!(events);
                 assert_eq!(source, "auto");
@@ -1482,34 +2229,72 @@ mod tests {
     #[test]
     fn identify_url_only_splits_a_title_when_uploader_agrees() {
         let candidate = needle_core::Candidate {
-            provider: "soundcloud".into(), id: "1".into(), url: "https://soundcloud.test/1".into(),
-            title: "Whethan - Nissan Altima (Whethan Remix)".into(), uploader: Some("Whethan".into()),
-            duration_ms: None, thumbnail_url: None, view_count: None, audio_codec: None,
-            audio_bitrate_kbps: None, query_origin: "canonical".into(),
+            provider: "soundcloud".into(),
+            id: "1".into(),
+            url: "https://soundcloud.test/1".into(),
+            title: "Whethan - Nissan Altima (Whethan Remix)".into(),
+            uploader: Some("Whethan".into()),
+            channel_is_verified: None,
+            duration_ms: None,
+            thumbnail_url: None,
+            view_count: None,
+            audio_codec: None,
+            audio_bitrate_kbps: None,
+            query_origin: "canonical".into(),
         };
-        assert_eq!(identify_candidate(&candidate), ("Whethan".into(), "Nissan Altima (Whethan Remix)".into(), false));
+        assert_eq!(
+            identify_candidate(&candidate),
+            (
+                "Whethan".into(),
+                "Nissan Altima (Whethan Remix)".into(),
+                false
+            )
+        );
     }
 
     #[test]
     fn identify_url_marks_untrusted_title_shape_uncertain() {
         let candidate = needle_core::Candidate {
-            provider: "soundcloud".into(), id: "1".into(), url: "https://soundcloud.test/1".into(),
-            title: "Nissan Altima (Whethan Remix)".into(), uploader: Some("Whethan".into()),
-            duration_ms: None, thumbnail_url: None, view_count: None, audio_codec: None,
-            audio_bitrate_kbps: None, query_origin: "canonical".into(),
+            provider: "soundcloud".into(),
+            id: "1".into(),
+            url: "https://soundcloud.test/1".into(),
+            title: "Nissan Altima (Whethan Remix)".into(),
+            uploader: Some("Whethan".into()),
+            channel_is_verified: None,
+            duration_ms: None,
+            thumbnail_url: None,
+            view_count: None,
+            audio_codec: None,
+            audio_bitrate_kbps: None,
+            query_origin: "canonical".into(),
         };
-        assert_eq!(identify_candidate(&candidate).2, true);
+        assert!(identify_candidate(&candidate).2);
     }
 
     #[test]
     fn identify_url_uses_artist_prefix_when_the_remixer_uploaded_it() {
         let candidate = needle_core::Candidate {
-            provider: "soundcloud".into(), id: "1".into(), url: "https://soundcloud.test/1".into(),
-            title: "Doechii - Nissan Altima (Whethan Remix)".into(), uploader: Some("Whethan".into()),
-            duration_ms: None, thumbnail_url: None, view_count: None, audio_codec: None,
-            audio_bitrate_kbps: None, query_origin: "canonical".into(),
+            provider: "soundcloud".into(),
+            id: "1".into(),
+            url: "https://soundcloud.test/1".into(),
+            title: "Doechii - Nissan Altima (Whethan Remix)".into(),
+            uploader: Some("Whethan".into()),
+            channel_is_verified: None,
+            duration_ms: None,
+            thumbnail_url: None,
+            view_count: None,
+            audio_codec: None,
+            audio_bitrate_kbps: None,
+            query_origin: "canonical".into(),
         };
-        assert_eq!(identify_candidate(&candidate), ("Doechii".into(), "Nissan Altima (Whethan Remix)".into(), true));
+        assert_eq!(
+            identify_candidate(&candidate),
+            (
+                "Doechii".into(),
+                "Nissan Altima (Whethan Remix)".into(),
+                true
+            )
+        );
     }
 
     #[test]
@@ -1527,7 +2312,10 @@ mod tests {
         assert_eq!(response["ok"], true);
         assert_eq!(response["request"]["artist"], "Artist");
         assert!(response["metadata"].is_null());
-        assert_eq!(response["candidates"][0]["candidate"]["url"], "https://example.test/abc");
+        assert_eq!(
+            response["candidates"][0]["candidate"]["url"],
+            "https://example.test/abc"
+        );
         assert_eq!(response["candidates"][0]["score"]["status"], "rejected");
     }
 
@@ -1535,7 +2323,9 @@ mod tests {
     fn strict_mode_rejects_scored_candidate_but_default_preserves_legacy_behavior() {
         let (_, rejected) = rejected_candidate();
         assert!(guard_selected_candidate(false, &rejected).is_ok());
-        let error = guard_selected_candidate(true, &rejected).unwrap_err().to_string();
+        let error = guard_selected_candidate(true, &rejected)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("strict mode"));
         assert!(error.contains("reaction video"));
     }
@@ -1571,7 +2361,8 @@ esac
             &needle_core::search::build_queries("Artist", "Song", None),
             needle_core::search::SearchSource::Auto,
             Some("https://example.test/song"),
-        ).unwrap();
+        )
+        .unwrap();
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].id, "direct-1");
@@ -1597,7 +2388,6 @@ esac
             source: Default::default(),
         }
     }
-
 
     #[test]
     fn strips_official_music_video_leaving_no_empty_parens() {
@@ -1652,7 +2442,10 @@ esac
     fn infer_title_from_source_title_handles_official_music_video() {
         // End-to-end: source title with (Official Music Video) should yield clean title
         assert_eq!(
-            infer_title_from_source_title("Playboi Carti - H00DBYAIR (Official Music Video)", "Playboi Carti"),
+            infer_title_from_source_title(
+                "Playboi Carti - H00DBYAIR (Official Music Video)",
+                "Playboi Carti"
+            ),
             Some("H00DBYAIR".to_string())
         );
         assert_eq!(
@@ -1664,7 +2457,10 @@ esac
     #[test]
     fn infer_title_from_source_title_handles_with_lyrics() {
         assert_eq!(
-            infer_title_from_source_title("Chain Heavy (With Lyrics) - Kanye West ft Talib Kweli", "Kanye West"),
+            infer_title_from_source_title(
+                "Chain Heavy (With Lyrics) - Kanye West ft Talib Kweli",
+                "Kanye West"
+            ),
             Some("Chain Heavy".to_string())
         );
     }
@@ -1684,10 +2480,7 @@ esac
             canonical_library_artist(Some(&meta), "A$AP ROCKY"),
             "Theophilus London"
         );
-        assert_eq!(
-            canonical_library_artist(None, "A$AP ROCKY"),
-            "A$AP ROCKY"
-        );
+        assert_eq!(canonical_library_artist(None, "A$AP ROCKY"), "A$AP ROCKY");
     }
 
     #[test]
@@ -1719,11 +2512,7 @@ esac
     fn accepts_metadata_when_request_artist_is_featured() {
         let mut meta = metadata("Theophilus London", "Big Spender");
         meta.featured_artists = vec!["A$AP Rocky".into()];
-        let result = filter_compatible_metadata(
-            Some(meta),
-            "A$AP ROCKY",
-            "Big Spender",
-        );
+        let result = filter_compatible_metadata(Some(meta), "A$AP ROCKY", "Big Spender");
         assert!(result.is_some());
     }
 
@@ -1747,18 +2536,77 @@ esac
         base.track_number = Some(13);
         base.disc_number = Some(1);
         base.release_date = Some("2024-08-09".into());
-        let tagged = metadata_for_tagging(
-            Some(&base),
-            "Nissan Altima (Whethan Remix)",
-            None,
-        )
-        .unwrap();
+        let tagged =
+            metadata_for_tagging(Some(&base), "Nissan Altima (Whethan Remix)", None).unwrap();
 
         assert_eq!(tagged.title, "Nissan Altima (Whethan Remix)");
         assert_eq!(tagged.album, None);
         assert_eq!(tagged.track_number, None);
         assert_eq!(tagged.disc_number, None);
         assert_eq!(tagged.release_date, None);
+    }
+
+    #[test]
+    fn variant_tagging_preserves_authoritative_featured_artists() {
+        let mut base = metadata("Fabolous", "Throw It in the Bag");
+        base.featured_artists = vec!["Drake".into()];
+        let tagged = metadata_for_tagging(Some(&base), "Throw It in the Bag Remix", None).unwrap();
+        assert_eq!(tagged.title, "Throw It in the Bag Remix");
+        assert_eq!(tagged.featured_artists, vec!["Drake"]);
+    }
+
+    #[test]
+    fn approved_tags_round_trip_with_empty_optional_fields() {
+        let json = r#"{"artist":"The Weeknd","title":"Wanderlust (Snakehips Remix)","album":"","album_artist":"The Weeknd","artwork_url":"","source_url":"https://youtube.test/watch?v=1"}"#;
+        let tags = parse_approved_tags(json).unwrap();
+        assert_eq!(tags.album, "");
+        assert_eq!(tags.artwork_url, "");
+        assert_eq!(approved_tags_metadata(&tags).album, None);
+        assert_eq!(approved_tags_metadata(&tags).artwork_url, None);
+    }
+
+    #[test]
+    fn approved_tags_never_carry_unreviewed_release_fields() {
+        let tags = ApprovedTags {
+            artist: "Artist".into(),
+            title: "Song (Remix)".into(),
+            album: "".into(),
+            album_artist: "Artist".into(),
+            featured_artists: vec![],
+            artwork_url: "".into(),
+            source_url: "https://youtube.test/watch?v=1".into(),
+        };
+        let metadata = approved_tags_metadata(&tags);
+        assert_eq!(metadata.track_number, None);
+        assert_eq!(metadata.disc_number, None);
+        assert_eq!(metadata.release_date, None);
+        assert_eq!(metadata.title, "Song (Remix)");
+    }
+
+    #[test]
+    fn preview_preserves_selected_remix_wording() {
+        assert_eq!(
+            source_title_for_preview("The Weeknd - Wanderlust (Snakehips Remix)", "The Weeknd"),
+            "Wanderlust (Snakehips Remix)"
+        );
+    }
+
+    #[test]
+    fn preview_adds_authoritative_featured_artists() {
+        assert_eq!(
+            preview_title_with_features(
+                "Throw It in the Bag".into(),
+                "Fabolous - Throw It in the Bag Remix",
+                &["Drake".into()]
+            ),
+            "Throw It in the Bag (feat. Drake)"
+        );
+        assert_eq!(
+            detect_artwork_type(b"\x89PNG\r\n\x1a\nrest"),
+            Some(("image/png", "png"))
+        );
+        assert_eq!(detect_artwork_type(b"RIFFxxxxWEBP"), None);
+        assert_eq!(detect_artwork_type(b"not-an-image"), None);
     }
 
     #[test]
@@ -1793,7 +2641,9 @@ esac
     #[test]
     fn infers_album_from_selected_source_title() {
         assert_eq!(
-            infer_album_from_source_title("West Coast Wu-Tang ft. Punch and Ab-Soul - Kendrick Lamar (C4)"),
+            infer_album_from_source_title(
+                "West Coast Wu-Tang ft. Punch and Ab-Soul - Kendrick Lamar (C4)"
+            ),
             Some("C4".to_string()),
         );
     }
@@ -1816,6 +2666,7 @@ esac
                     url: "https://example.test/1".into(),
                     title: "Kendrick Lamar - West Coast Wu-Tang Ft. Ab-Soul, Punch (Lyrics)".into(),
                     uploader: None,
+                    channel_is_verified: None,
                     duration_ms: None,
                     thumbnail_url: None,
                     view_count: None,
@@ -1838,6 +2689,7 @@ esac
                     url: "https://example.test/2".into(),
                     title: "West Coast Wu-Tang ft. Punch and Ab-Soul - Kendrick Lamar (C4)".into(),
                     uploader: None,
+                    channel_is_verified: None,
                     duration_ms: None,
                     thumbnail_url: None,
                     view_count: None,
@@ -1860,6 +2712,7 @@ esac
                     url: "https://example.test/3".into(),
                     title: "Kendrick Lamar - West Coast Wu-Tang (C4)".into(),
                     uploader: None,
+                    channel_is_verified: None,
                     duration_ms: None,
                     thumbnail_url: None,
                     view_count: None,
@@ -1877,13 +2730,19 @@ esac
             ),
         ];
 
-        assert_eq!(infer_album_from_scored_candidates(&scored), Some("C4".to_string()));
+        assert_eq!(
+            infer_album_from_scored_candidates(&scored),
+            Some("C4".to_string())
+        );
     }
 
     #[test]
     fn infers_clean_title_from_artist_first_source_title() {
         assert_eq!(
-            infer_title_from_source_title("Kendrick Lamar - West Coast Wu-Tang Ft. Ab-Soul, Punch (Lyrics)", "kendrick"),
+            infer_title_from_source_title(
+                "Kendrick Lamar - West Coast Wu-Tang Ft. Ab-Soul, Punch (Lyrics)",
+                "kendrick"
+            ),
             Some("West Coast Wu-Tang (feat. Ab-Soul & Punch)".to_string()),
         );
     }
@@ -1891,7 +2750,10 @@ esac
     #[test]
     fn infers_clean_title_from_artist_last_source_title() {
         assert_eq!(
-            infer_title_from_source_title("West Coast Wu-Tang ft. Punch and Ab-Soul - Kendrick Lamar (C4)", "kendrick"),
+            infer_title_from_source_title(
+                "West Coast Wu-Tang ft. Punch and Ab-Soul - Kendrick Lamar (C4)",
+                "kendrick"
+            ),
             Some("West Coast Wu-Tang (feat. Punch & Ab-Soul)".to_string()),
         );
     }
@@ -1923,7 +2785,10 @@ esac
     #[test]
     fn full_fallback_title_has_feat_parens() {
         assert_eq!(
-            infer_title_from_source_title("Kendrick Lamar - West Coast Wu-Tang Ft. Ab-Soul, Punch (Lyrics)", "kendrick"),
+            infer_title_from_source_title(
+                "Kendrick Lamar - West Coast Wu-Tang Ft. Ab-Soul, Punch (Lyrics)",
+                "kendrick"
+            ),
             Some("West Coast Wu-Tang (feat. Ab-Soul & Punch)".to_string()),
         );
     }
@@ -1941,13 +2806,17 @@ esac
         );
     }
 
-    fn rejected_candidate() -> (needle_core::search::Candidate, needle_core::score::CandidateScore) {
+    fn rejected_candidate() -> (
+        needle_core::search::Candidate,
+        needle_core::score::CandidateScore,
+    ) {
         let candidate = needle_core::search::Candidate {
             provider: "youtube".into(),
             id: "abc".into(),
             title: "Some Cover (Reaction)".into(),
             url: "https://example.test/abc".into(),
             uploader: Some("Someone".into()),
+            channel_is_verified: None,
             duration_ms: Some(200_000),
             thumbnail_url: None,
             view_count: None,

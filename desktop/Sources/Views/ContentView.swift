@@ -17,10 +17,12 @@ struct ContentView: View {
                 case .addMusic: AddMusicView(model: model)
                 case .reviewQueue: ReviewQueueView(model: model)
                 case .discover: DiscoveryView(model: model)
+                case .bookmarks: BookmarksView(model: model)
                 case .activity: ActivityView(model: model)
                 case .library: LibraryView(model: model)
                 }
             }
+            .navigationTitle(model.destination == .addMusic ? "Listening Room" : model.destination.rawValue)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -37,6 +39,7 @@ struct ContentView: View {
                 }
             }
         }
+        .tint(.orange)
         .sheet(isPresented: $showingGuide) {
             TabGuideView(destination: model.destination)
         }

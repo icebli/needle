@@ -25,6 +25,8 @@ struct Entry {
     id: String,
     title: String,
     uploader: Option<String>,
+    #[serde(default)]
+    channel_is_verified: Option<bool>,
     duration: Option<f64>,
     thumbnail: Option<String>,
     #[serde(default)]
@@ -215,6 +217,7 @@ fn parse_entries(stdout: &str, provider: &str, query: &str) -> Result<Vec<Candid
             url,
             title: entry.title,
             uploader: entry.uploader,
+            channel_is_verified: entry.channel_is_verified,
             duration_ms: entry
                 .duration
                 .map(|seconds| (seconds.max(0.0) * 1000.0) as u64),
@@ -283,6 +286,7 @@ mod tests {
             url: "https://example/1".into(),
             title: "Official audio".into(),
             uploader: Some("The Artist VEVO".into()),
+            channel_is_verified: None,
             duration_ms: None,
             thumbnail_url: None,
             view_count: None,

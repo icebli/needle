@@ -1,0 +1,294 @@
+[
+  {
+    "artist": {
+      "uri": "spotify:artist:13ubrt8QOOCPljQ2FL1Kca",
+      "id": "13ubrt8QOOCPljQ2FL1Kca",
+      "name": "A$AP Rocky"
+    },
+    "title": "FERG - Work REMIX (Official Video) ft. A$AP ROCKY, French Montana, Trinidad James, SchoolBoy Q",
+    "upload": "FERG - Work REMIX (Official Video) ft. A$AP ROCKY, French Montana, Trinidad James, SchoolBoy Q",
+    "tracks": [
+      {
+        "id": "7xVLFuuYdAvcTfcP3IG3dS",
+        "name": "Work REMIX (feat. A$AP Rocky, French Montana, Trinidad James & ScHoolboy Q)",
+        "uri": "spotify:track:7xVLFuuYdAvcTfcP3IG3dS",
+        "artists": [
+          {
+            "id": "5dHt1vcEm9qb8fCyLcB3HL",
+            "name": "A$AP Ferg"
+          },
+          {
+            "id": "6vXTefBL93Dj5IqAWq6OTv",
+            "name": "French Montana"
+          },
+          {
+            "id": "13ubrt8QOOCPljQ2FL1Kca",
+            "name": "A$AP Rocky"
+          },
+          {
+            "id": "0I5HubncQ8E1MFZOlPDY4J",
+            "name": "Trinidad James"
+          },
+          {
+            "id": "5IcR3N7QB1j6KBL8eImZ8m",
+            "name": "ScHoolboy Q"
+          }
+        ],
+        "durationMs": 283693
+      }
+    ],
+    "expectedID": "7xVLFuuYdAvcTfcP3IG3dS"
+  },
+  {
+    "artist": {
+      "id": "1tG7s7S4sq2eFFW0QZyLbm",
+      "uri": "spotify:artist:1tG7s7S4sq2eFFW0QZyLbm",
+      "name": "Sheff G"
+    },
+    "title": "Weight On Me (Visualizer) (feat. Sleepy Hallow)",
+    "upload": "Sheff G - Weight On Me (Visualizer) (feat. Sleepy Hallow)",
+    "tracks": [
+      {
+        "id": "6A4hgJdwriera4WSUl4moW",
+        "name": "Weight On Me",
+        "uri": "spotify:track:6A4hgJdwriera4WSUl4moW",
+        "artists": [
+          {
+            "id": "1tG7s7S4sq2eFFW0QZyLbm",
+            "name": "Sheff G"
+          },
+          {
+            "id": "6EPlBSH2RSiettczlz7ihV",
+            "name": "Sleepy Hallow"
+          }
+        ],
+        "durationMs": 157619
+      }
+    ],
+    "expectedID": "6A4hgJdwriera4WSUl4moW"
+  },
+  {
+    "artist": {
+      "name": "Drake",
+      "uri": "spotify:artist:3TVXtAsR1Inumwj472S9r4",
+      "id": "3TVXtAsR1Inumwj472S9r4"
+    },
+    "title": "Lil Wayne ~ She Will Feat. Drake (Rick Ross Remix)",
+    "upload": "Lil Wayne ~ She Will Feat. Drake (Rick Ross Remix)",
+    "tracks": [
+      {
+        "id": "0b4M7hd7mzLTm99MrMeZsp",
+        "name": "She Will",
+        "uri": "spotify:track:0b4M7hd7mzLTm99MrMeZsp",
+        "artists": [
+          {
+            "id": "55Aa2cqylxrFIXC767Z865",
+            "name": "Lil Wayne"
+          },
+          {
+            "id": "3TVXtAsR1Inumwj472S9r4",
+            "name": "Drake"
+          }
+        ],
+        "durationMs": 305840
+      },
+      {
+        "id": "1wFFFzJ5EsKbBWZriAcubN",
+        "name": "Family Matters",
+        "uri": "spotify:track:1wFFFzJ5EsKbBWZriAcubN",
+        "artists": [
+          {
+            "id": "3TVXtAsR1Inumwj472S9r4",
+            "name": "Drake"
+          }
+        ],
+        "durationMs": 456933
+      }
+    ],
+    "expectedID": null
+  },
+  {
+    "artist": {
+      "uri": "spotify:artist:1tG7s7S4sq2eFFW0QZyLbm",
+      "id": "1tG7s7S4sq2eFFW0QZyLbm",
+      "name": "Sheff G"
+    },
+    "title": "No Suburban, Pt. 2 (Official Audio Visualizer)",
+    "upload": "Sheff G - No Suburban, Pt. 2 (Official Audio Visualizer)",
+    "tracks": [
+      {
+        "id": "3VayB5gLZGODx8b7RO1y5f",
+        "name": "No Suburban, Pt. 2",
+        "uri": "spotify:track:3VayB5gLZGODx8b7RO1y5f",
+        "artists": [
+          {
+            "id": "1tG7s7S4sq2eFFW0QZyLbm",
+            "name": "Sheff G"
+          }
+        ],
+        "durationMs": 153561
+      }
+    ],
+    "expectedID": "3VayB5gLZGODx8b7RO1y5f"
+  },
+  {
+    "artist": {
+      "name": "Denzel Curry",
+      "uri": "spotify:artist:6fxyWrfmjcbj5d12gXeiNV",
+      "id": "6fxyWrfmjcbj5d12gXeiNV"
+    },
+    "title": "Denzel Curry covers Rage Against The Machine 'Bulls On Parade' for Like A Version",
+    "upload": "Denzel Curry covers Rage Against The Machine 'Bulls On Parade' for Like A Version",
+    "tracks": [
+      {
+        "id": "6FCfj69zzQHnrx4fTukhfo",
+        "name": "Bulls on Parade - triple j Like A Version",
+        "uri": "spotify:track:6FCfj69zzQHnrx4fTukhfo",
+        "artists": [
+          {
+            "id": "6fxyWrfmjcbj5d12gXeiNV",
+            "name": "Denzel Curry"
+          },
+          {
+            "id": "2ztWo9ZI0S6mzpQVmmMcE1",
+            "name": "triple j"
+          }
+        ],
+        "durationMs": 269485
+      }
+    ],
+    "expectedID": "6FCfj69zzQHnrx4fTukhfo"
+  },
+  {
+    "artist": {
+      "uri": "spotify:artist:1tG7s7S4sq2eFFW0QZyLbm",
+      "id": "1tG7s7S4sq2eFFW0QZyLbm",
+      "name": "Sheff G"
+    },
+    "title": "Krimelife Ca$$ ABG Neal Sheff G Sleepy Hallow \"Forrest Gump\" (WSHH Exclusive - Official Music Video)",
+    "upload": "Krimelife Ca$$ ABG Neal Sheff G Sleepy Hallow \"Forrest Gump\" (WSHH Exclusive - Official Music Video)",
+    "tracks": [
+      {
+        "id": "32LLYzFcucxGqqIOQzpcNM",
+        "name": "Forrest Gump (feat. ABG Neal)",
+        "uri": "spotify:track:32LLYzFcucxGqqIOQzpcNM",
+        "artists": [
+          {
+            "id": "0ZMIyR3pxywqRD66PVrhqj",
+            "name": "Krimelife Ca$$"
+          },
+          {
+            "id": "6GiUHOmKrEanWhJp5QZvfV",
+            "name": "ABG Neal"
+          }
+        ],
+        "durationMs": 92640
+      },
+      {
+        "id": "1IzMOUiBBEtTrKpKOzZqUJ",
+        "name": "Forrest Gump (feat. ABG Neal, Sheff G & Sleepy Hallow) - Remix",
+        "uri": "spotify:track:1IzMOUiBBEtTrKpKOzZqUJ",
+        "artists": [
+          {
+            "id": "0ZMIyR3pxywqRD66PVrhqj",
+            "name": "Krimelife Ca$$"
+          },
+          {
+            "id": "6GiUHOmKrEanWhJp5QZvfV",
+            "name": "ABG Neal"
+          },
+          {
+            "id": "1tG7s7S4sq2eFFW0QZyLbm",
+            "name": "Sheff G"
+          },
+          {
+            "id": "6EPlBSH2RSiettczlz7ihV",
+            "name": "Sleepy Hallow"
+          }
+        ],
+        "durationMs": 178285
+      }
+    ],
+    "expectedID": null
+  },
+  {
+    "artist": {
+      "name": "Denzel Curry",
+      "uri": "spotify:artist:6fxyWrfmjcbj5d12gXeiNV",
+      "id": "6fxyWrfmjcbj5d12gXeiNV"
+    },
+    "title": "Bruuuh Remix",
+    "upload": "JID, Denzel Curry \u2013 Bruuuh Remix [Official Audio]",
+    "tracks": [
+      {
+        "id": "5LghBGmNUUwI2BvX2boIdK",
+        "name": "Bruuuh (with Denzel Curry) - Remix",
+        "uri": "spotify:track:5LghBGmNUUwI2BvX2boIdK",
+        "artists": [
+          {
+            "id": "6U3ybJ9UHNKEdsH7ktGBZ7",
+            "name": "JID"
+          },
+          {
+            "id": "6fxyWrfmjcbj5d12gXeiNV",
+            "name": "Denzel Curry"
+          }
+        ],
+        "durationMs": 206446
+      }
+    ],
+    "expectedID": "5LghBGmNUUwI2BvX2boIdK"
+  },
+  {
+    "artist": {
+      "name": "Denzel Curry",
+      "id": "6fxyWrfmjcbj5d12gXeiNV",
+      "uri": "spotify:artist:6fxyWrfmjcbj5d12gXeiNV"
+    },
+    "title": "Threatz (Ekali & Gravez Remix)",
+    "upload": "Denzel Curry - Threatz (Ekali & Gravez Remix)",
+    "tracks": [
+      {
+        "id": "4SMx7LkOPBlTC5UfJl3zSe",
+        "name": "Threatz",
+        "uri": "spotify:track:4SMx7LkOPBlTC5UfJl3zSe",
+        "artists": [
+          {
+            "id": "6fxyWrfmjcbj5d12gXeiNV",
+            "name": "Denzel Curry"
+          },
+          {
+            "id": "44mzV1KxYq8i2S4LHZxQAp",
+            "name": "Yung Simmie"
+          },
+          {
+            "id": "7KduBCxhfAMiQlhMOHL3IZ",
+            "name": "Robb Bank$"
+          }
+        ],
+        "durationMs": 190000
+      },
+      {
+        "id": "70FCOjSnF5Lahoy7LwuG22",
+        "name": "MUTT THAT BIH [Feat. 1900Rugrat & Key Nyata]",
+        "uri": "spotify:track:70FCOjSnF5Lahoy7LwuG22",
+        "artists": [
+          {
+            "id": "6fxyWrfmjcbj5d12gXeiNV",
+            "name": "Denzel Curry"
+          },
+          {
+            "id": "6HHAJjAD9nZ2GftcwEf8r5",
+            "name": "1900Rugrat"
+          },
+          {
+            "id": "4X2V63Czlm32j6Yk38WeX5",
+            "name": "Key Nyata"
+          }
+        ],
+        "durationMs": 237421
+      }
+    ],
+    "expectedID": null
+  }
+]

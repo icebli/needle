@@ -109,18 +109,23 @@ cp "$REPO_DIR/browser-extension/icons/needle-96.png" "$CHROME_STAGE/icons/needle
 
 if [[ "$CLI_ONLY" == false && "$(uname -s)" == "Darwin" && -f "$REPO_DIR/desktop/Package.swift" ]]; then
   "$SCRIPT_DIR/build-desktop.sh"
-  mkdir -p "$HOME/Applications"
-  # Stage and verify a complete bundle so obsolete resources cannot invalidate
-  # the signature when upgrading an existing installation.
-  APP_STAGE="$(mktemp -d "$HOME/Applications/.needle-install.XXXXXX")"
+  APP_DEST="/Applications/Needle.app"
+  APP_STAGE="$(mktemp -d /Applications/.needle-install.XXXXXX)"
   ditto "$REPO_DIR/target/desktop/Needle.app" "$APP_STAGE/Needle.app"
   codesign --verify --deep --strict "$APP_STAGE/Needle.app"
-  if [[ -e "$HOME/Applications/Needle.app" ]]; then
-    mv "$HOME/Applications/Needle.app" "$APP_STAGE/Previous-Needle.app"
+  cmp "$REPO_DIR/target/release/needle" "$APP_STAGE/Needle.app/Contents/Resources/bin/needle"
+  cmp "$REPO_DIR/target/release/needle-browser-host" "$APP_STAGE/Needle.app/Contents/Resources/bin/needle-browser-host"
+  "$APP_STAGE/Needle.app/Contents/Resources/bin/needle" --help >/dev/null
+  if [[ -e "$APP_DEST" ]]; then
+    mv "$APP_DEST" "$APP_STAGE/Previous-Needle.app"
   fi
-  mv "$APP_STAGE/Needle.app" "$HOME/Applications/Needle.app"
+  mv "$APP_STAGE/Needle.app" "$APP_DEST"
+  codesign --verify --deep --strict "$APP_DEST"
+  cmp "$CARGO_BIN_DIR/needle" "$APP_DEST/Contents/Resources/bin/needle"
+  cmp "$INSTALL_DIR/needle-browser-host" "$APP_DEST/Contents/Resources/bin/needle-browser-host"
+  "$APP_DEST/Contents/Resources/bin/needle" --help >/dev/null
   echo "Previous app backup: $APP_STAGE/Previous-Needle.app"
-  echo "Desktop app: $HOME/Applications/Needle.app"
+  echo "Desktop app: $APP_DEST"
 fi
 
 echo "Firefox native host: $NATIVE_MANIFEST"

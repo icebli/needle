@@ -55,7 +55,7 @@ struct ReviewQueueView: View {
                             .disabled(!queue.items.contains { [.saved, .skipped].contains($0.state) })
                     }.frame(minWidth: 190, idealWidth: 220, maxWidth: 240)
                     if let item = queue.selected {
-                        ReviewItemView(item: item, queue: queue, preview: preview)
+                        ReviewItemView(item: item, queue: queue, bookmarks: model.bookmarks, preview: preview)
                             .id(item.id).frame(minWidth: 430, maxWidth: .infinity)
                     } else {
                         ContentUnavailableView("Choose a recording", systemImage: "music.note")
@@ -103,24 +103,27 @@ struct ReviewQueueView: View {
 private struct ReviewItemView: View {
     let item: ReviewItem
     let queue: ReviewQueue
+    let bookmarks: BookmarkStore
     let preview: AudioPreviewService
     @State private var artist: String
     @State private var title: String
     @State private var source: String
     @State private var spotify = false
     @State private var showEdit = false
-    @State private var showExcluded = false
+    @State private var reviewDraft: MetadataDraft?
+    @State private var reviewCandidate: CandidateResult?
+    @State private var preparingMetadata = false
+    @State private var metadataTask: Task<Void, Never>?
 
-    init(item: ReviewItem, queue: ReviewQueue, preview: AudioPreviewService) {
-        self.item = item; self.queue = queue; self.preview = preview
+    init(item: ReviewItem, queue: ReviewQueue, bookmarks: BookmarkStore, preview: AudioPreviewService) {
+        self.item = item; self.queue = queue; self.bookmarks = bookmarks; self.preview = preview
         _artist = State(initialValue: item.artist)
         _title = State(initialValue: item.title)
         _source = State(initialValue: item.sourceURL)
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(item.label).font(.title2.bold()).textSelection(.enabled)
@@ -130,7 +133,7 @@ private struct ReviewItemView: View {
                     if [.searching, .downloading].contains(item.state) {
                         Button("Cancel") { queue.cancel(item.id) }
                     } else if ![.approved, .saved].contains(item.state) {
-                        Button("Skip") { preview.stop(); queue.skip(item.id) }
+                        Button("Skip") { preview.stop(); queue.skip(item.id) }.disabled(preparingMetadata)
                     }
                 }
                 if let detail = item.detail {
@@ -154,11 +157,7 @@ private struct ReviewItemView: View {
                             .help("Needle saves the local file either way. With the companion, it also adds the MP3 to this playlist.")
                         Spacer()
                         Menu {
-                            Button("Edit request") { showEdit.toggle() }
-                            if hasRejectedCandidates {
-                                Toggle("Show excluded recordings", isOn: $showExcluded)
-                                    .toggleStyle(.checkbox)
-                            }
+                            Button("Edit request") { showEdit.toggle() }.disabled(preparingMetadata)
                         } label: {
                             Label("Review options", systemImage: "ellipsis.circle")
                         }
@@ -169,26 +168,37 @@ private struct ReviewItemView: View {
                         Text("Spotify delivery requires MP3.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
-                    ForEach(response.candidates.filter { showExcluded || $0.score.status != "rejected" }) { candidate in
-                        CandidateCard(result: candidate, disabled: false, preview: preview,
-                                      saveLabel: "Approve & download", showsPreviewPositionOption: false) {
-                            preview.stop(); queue.approve(candidate, itemID: item.id, spotify: spotify)
+                    ListeningRoomView(candidates: response.candidates, artist: item.artist, title: item.title,
+                                      album: response.metadata?.album ?? "", bookmarks: bookmarks, preview: preview,
+                                      disabled: preparingMetadata,
+                                      saveLabel: preparingMetadata ? "Preparing metadata…" : "Review metadata", showsHeader: false) { candidate in
+                        preview.stop()
+                        preparingMetadata = true
+                        metadataTask = Task {
+                            let draft = await queue.prepareMetadata(candidate, itemID: item.id)
+                            preparingMetadata = false
+                            guard !Task.isCancelled, queue.selectedID == item.id,
+                                  queue.selected?.state == .ready else { return }
+                            if let draft { reviewCandidate = candidate; reviewDraft = draft }
                         }
-                    }
-                    if response.candidates.allSatisfy({ $0.score.status == "rejected" }) && !showExcluded {
-                        Text("All sources were excluded. Show excluded recordings for the reasons, or edit the request.")
                     }
                 }
                 if item.state == .searching || item.state == .downloading {
                     ProgressView().controlSize(.small)
                 }
-            }.padding(.horizontal, 16).padding(.bottom, 20)
-        }
+        }.padding(.horizontal, 16).padding(.bottom, 12)
+        .onDisappear { metadataTask?.cancel(); preparingMetadata = false }
         .onChange(of: item.artist) { artist = item.artist }
         .onChange(of: item.title) { title = item.title }
+        .sheet(item: $reviewDraft) { draft in
+            if let candidate = reviewCandidate {
+                MetadataReviewView(draft: draft, candidate: candidate, onCancel: { reviewDraft = nil; reviewCandidate = nil }) { approved in
+                    queue.approve(candidate, itemID: item.id, spotify: spotify, approved: approved)
+                    reviewDraft = nil
+                    reviewCandidate = nil
+                }
+            }
+        }
     }
 
-    private var hasRejectedCandidates: Bool {
-        item.response?.candidates.contains { $0.score.status == "rejected" } == true
-    }
 }

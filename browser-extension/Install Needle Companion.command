@@ -3,15 +3,25 @@ set -eu
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOST_APP=""
-for candidate in "/Applications/Needle.app" "$HOME/Applications/Needle.app"; do
-  if [[ -x "$candidate/Contents/Resources/bin/needle-browser-host" ]]; then
+REQUESTED_APP="${NEEDLE_APP_PATH:-}"
+if [[ -n "$REQUESTED_APP" ]]; then
+  CANDIDATES=("$REQUESTED_APP")
+else
+  CANDIDATES=("/Applications/Needle.app" "$HOME/Applications/Needle.app")
+fi
+for candidate in "${CANDIDATES[@]}"; do
+  if [[ -x "$candidate/Contents/Resources/bin/needle-browser-host" && -x "$candidate/Contents/Resources/bin/node" ]]; then
     HOST_APP="$candidate"
     break
   fi
 done
 
 if [[ -z "$HOST_APP" ]]; then
-  echo "Needle.app was not found in /Applications or ~/Applications. Install Needle first, then run this installer again."
+  if [[ -n "$REQUESTED_APP" ]]; then
+    echo "Needle.app at $REQUESTED_APP is missing the browser host or bundled node runtime. Install a complete Needle.app or unset NEEDLE_APP_PATH."
+  else
+    echo "Needle.app with a browser host and bundled node runtime was not found in /Applications or ~/Applications. Install Needle first, then run this installer again."
+  fi
   read -r -p "Press Return to close…" _ || true
   exit 1
 fi

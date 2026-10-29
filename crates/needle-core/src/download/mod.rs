@@ -1,5 +1,5 @@
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::debug;
@@ -16,10 +16,7 @@ pub struct DownloadPlan {
 }
 
 /// Download audio from a candidate URL using yt-dlp
-pub fn download_audio(
-    yt_dlp_path: &str,
-    plan: &DownloadPlan,
-) -> Result<PathBuf> {
+pub fn download_audio(yt_dlp_path: &str, plan: &DownloadPlan) -> Result<PathBuf> {
     let tmp_dir = &plan.output_dir;
     std::fs::create_dir_all(tmp_dir)?;
 
@@ -32,17 +29,21 @@ pub fn download_audio(
     cmd.args([
         &plan.url,
         "--extract-audio",
-        "--audio-format", &plan.target_format,
-        "--audio-quality", "0",
+        "--audio-format",
+        &plan.target_format,
+        "--audio-quality",
+        "0",
         "--embed-thumbnail",
         "--no-playlist",
         // YouTube's default web client can return signed media URLs that 403
         // for yt-dlp's follow-up request. Android exposes a compatible
         // client path without changing the selected recording.
-        "--extractor-args", "youtube:player_client=android",
+        "--extractor-args",
+        "youtube:player_client=android",
         "--no-warnings",
         "--quiet",
-        "--output", &output_str,
+        "--output",
+        &output_str,
     ]);
 
     // Fixup fixes timestamp/stream issues common on SoundCloud streams
@@ -67,14 +68,14 @@ pub fn convert_audio(
     codec: &str,
     bitrate: Option<&str>,
 ) -> Result<PathBuf> {
-    debug!("ffmpeg convert: {} -> {}", input.display(), output.display());
+    debug!(
+        "ffmpeg convert: {} -> {}",
+        input.display(),
+        output.display()
+    );
 
     let mut cmd = Command::new(ffmpeg_path);
-    cmd.args([
-        "-y",
-        "-i", &input.to_string_lossy(),
-        "-c:a", codec,
-    ]);
+    cmd.args(["-y", "-i", &input.to_string_lossy(), "-c:a", codec]);
 
     if let Some(br) = bitrate {
         cmd.args(["-b:a", br]);
@@ -180,7 +181,8 @@ mod tests {
 
     #[test]
     fn prefers_audio_over_thumbnail_with_same_prefix() {
-        let root = std::env::temp_dir().join(format!("needle-download-pick-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("needle-download-pick-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("source.jpg"), b"thumb").unwrap();

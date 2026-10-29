@@ -1,7 +1,7 @@
+use crate::normalize::{NegativeMarker, NormalizedTitle};
+use crate::search::Candidate;
 use serde::{Deserialize, Serialize};
 use strsim::jaro_winkler;
-use crate::normalize::{NormalizedTitle, NegativeMarker};
-use crate::search::Candidate;
 
 /// Classification after scoring
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,21 +96,49 @@ pub fn score_candidate(
     config: &ScorerConfig,
 ) -> CandidateScore {
     let cand_norm = NormalizedTitle::from_raw(&candidate.title);
-    let title_score = fuzzy_title_match(request_title, &cand_norm);
-    let artist_score = fuzzy_artist_match(request_artist, &candidate.title, candidate.uploader.as_deref());
+    let requested_remix_match = request_title
+        .negative_markers
+        .contains(&NegativeMarker::Remix)
+        && cand_norm.negative_markers.contains(&NegativeMarker::Remix)
+        && canonical_title_phrase(&candidate.title.to_lowercase())
+            .contains(&canonical_title_phrase(&request_title.raw.to_lowercase()));
+    let requested_remix = request_title
+        .negative_markers
+        .contains(&NegativeMarker::Remix);
+    let missing_requested_remix =
+        requested_remix && !cand_norm.negative_markers.contains(&NegativeMarker::Remix);
+    let title_score = if requested_remix_match {
+        1.0
+    } else if missing_requested_remix {
+        fuzzy_title_match(request_title, &cand_norm).min(0.7)
+    } else {
+        fuzzy_title_match(request_title, &cand_norm)
+    };
+    let artist_score = fuzzy_artist_match(
+        request_artist,
+        &candidate.title,
+        candidate.uploader.as_deref(),
+    );
     let matching_remix = cand_norm.negative_markers.contains(&NegativeMarker::Remix)
-        && (title_score >= 0.95 || title_contains_request(request_title, &cand_norm))
+        && (requested_remix_match
+            || (!requested_remix
+                && (title_score >= 0.95 || title_contains_request(request_title, &cand_norm))))
         && artist_score > 0.9;
 
     let mut rejects = Vec::new();
     let mut warnings = Vec::new();
     let mut positives = Vec::new();
+    if missing_requested_remix {
+        warnings.push("requested remix not identified".to_string());
+    }
 
     // ─── Hard rejects (more important than scoring) ────────────────────────
 
     // Series marker mismatch
     if config.hard_reject_part_mismatch {
-        if let (Some(ref req_sm), Some(ref cand_sm)) = (&request_title.series_marker, &cand_norm.series_marker) {
+        if let (Some(ref req_sm), Some(ref cand_sm)) =
+            (&request_title.series_marker, &cand_norm.series_marker)
+        {
             if req_sm.kind == cand_sm.kind && req_sm.value != cand_sm.value {
                 rejects.push(format!(
                     "{} number mismatch: requested {}, found {}",
@@ -127,11 +155,11 @@ pub fn score_candidate(
     // Negative markers
     for m in &cand_norm.negative_markers {
         if *m == NegativeMarker::Remix && matching_remix {
-            warnings.push(format!("{}", m.label()));
+            warnings.push(m.label().to_string());
         } else if config.is_hard_reject_marker(m) {
-            rejects.push(format!("{}", m.label()));
+            rejects.push(m.label().to_string());
         } else {
-            warnings.push(format!("{}", m.label()));
+            warnings.push(m.label().to_string());
         }
     }
 
@@ -140,12 +168,13 @@ pub fn score_candidate(
     // strong title/series match should remain visible as uncertain.
     if let Some(expected) = expected_duration_ms {
         if let Some(cand_dur) = candidate.duration_ms {
-            let delta_ms = if expected > cand_dur { expected - cand_dur } else { cand_dur - expected };
+            let delta_ms = expected.abs_diff(cand_dur);
             let threshold = duration_reject_threshold_ms(config.duration_strictness, expected);
             if config.trust_reference_duration && delta_ms > threshold && title_score < 0.95 {
                 rejects.push(format!(
                     "duration mismatch: expected {}, found {}",
-                    fmt_duration(expected), fmt_duration(cand_dur)
+                    fmt_duration(expected),
+                    fmt_duration(cand_dur)
                 ));
             }
         }
@@ -194,7 +223,7 @@ pub fn score_candidate(
     // unless caller explicitly trusts reference duration.
     if let Some(expected) = expected_duration_ms {
         if let Some(cand_dur) = candidate.duration_ms {
-            let delta_ms = if expected > cand_dur { expected - cand_dur } else { cand_dur - expected };
+            let delta_ms = expected.abs_diff(cand_dur);
             let delta_sec = delta_ms / 1000;
             if delta_sec <= 5 {
                 score += 25.0;
@@ -222,29 +251,51 @@ pub fn score_candidate(
     if candidate.query_origin == "canonical" {
         score += 15.0;
         positives.push("canonical source (MusicBrainz)".to_string());
+    } else if candidate.channel_is_verified == Some(true)
+        && candidate.uploader.as_deref().is_some_and(|uploader| {
+            !request_artist.trim().is_empty()
+                && uploader.trim().eq_ignore_ascii_case(request_artist.trim())
+        })
+    {
+        score += 10.0;
+        positives.push("verified artist channel".to_string());
     } else if is_official_channel(candidate) {
         score += 10.0;
         positives.push("official channel".to_string());
-    } else if candidate.uploader.as_deref().unwrap_or("").to_ascii_lowercase().contains("vevo") {
+    } else if candidate
+        .uploader
+        .as_deref()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .contains("vevo")
+    {
         score += 8.0;
         positives.push("vevo upload".to_string());
     } else {
-        warnings.push("unofficial upload".to_string());
+        warnings.push("artist affiliation unconfirmed".to_string());
     }
 
     apply_provider_prior(candidate, &mut score, &mut warnings);
     apply_popularity_penalty(candidate, &mut score, &mut warnings);
 
     // Soft negative marker penalty
-    let soft_penalty: f32 = cand_norm.negative_markers.iter()
-        .filter(|m| !config.is_hard_reject_marker(m) || (**m == NegativeMarker::Remix && matching_remix))
-        .count() as f32 * 5.0;
+    let soft_penalty: f32 = cand_norm
+        .negative_markers
+        .iter()
+        .filter(|m| {
+            !config.is_hard_reject_marker(m)
+                || (**m == NegativeMarker::Remix && matching_remix && !requested_remix_match)
+        })
+        .count() as f32
+        * 5.0;
     score -= soft_penalty;
 
     // Clamp to 0-100
-    let confidence = score.clamp(0.0, 100.0) as u8;
+    let confidence = score.clamp(0.0, if missing_requested_remix { 49.0 } else { 100.0 }) as u8;
 
-    let status = if confidence >= 85 {
+    let status = if missing_requested_remix {
+        ScoreStatus::Uncertain
+    } else if confidence >= 85 {
         ScoreStatus::Recommended
     } else if confidence >= 50 || (rejects.is_empty() && title_score >= 0.95) {
         ScoreStatus::Uncertain
@@ -312,7 +363,8 @@ fn fuzzy_artist_match(request_artist: &str, candidate_title: &str, uploader: Opt
     let up_lower = uploader.map(|u| u.to_ascii_lowercase());
 
     // Exact match in title or uploader
-    if cand_lower.contains(&req_lower) || up_lower.as_ref().map_or(false, |u| u.contains(&req_lower)) {
+    if cand_lower.contains(&req_lower) || up_lower.as_ref().is_some_and(|u| u.contains(&req_lower))
+    {
         return 1.0;
     }
 
@@ -370,7 +422,11 @@ fn canonical_title_phrase(title: &str) -> String {
 }
 
 fn is_official_channel(candidate: &Candidate) -> bool {
-    let up = candidate.uploader.as_deref().unwrap_or("").to_ascii_lowercase();
+    let up = candidate
+        .uploader
+        .as_deref()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let title = candidate.title.to_ascii_lowercase();
 
     // YouTube: topic channels, vevo, official in title
@@ -381,8 +437,14 @@ fn is_official_channel(candidate: &Candidate) -> bool {
     // SoundCloud/YouTube: label/entertainment channels
     // Common patterns: "records", "entertainment", "music", "label", "official"
     let label_patterns = [
-        "records", "recordings", "entertainment", "music group",
-        "label", "official", "publishing", "productions",
+        "records",
+        "recordings",
+        "entertainment",
+        "music group",
+        "label",
+        "official",
+        "publishing",
+        "productions",
     ];
     if label_patterns.iter().any(|p| up.contains(p)) {
         return true;
@@ -407,7 +469,8 @@ fn content_reject_reason(title: &str, request_title: &NormalizedTitle) -> Option
         ("on-screen lyrics", "lyrics video"),
     ];
     if let Some(reason) = specific.iter().find_map(|(needle, label)| {
-        t.contains(needle).then(|| format!("non-recording content: {label}"))
+        t.contains(needle)
+            .then(|| format!("non-recording content: {label}"))
     }) {
         return Some(reason);
     }
@@ -427,10 +490,10 @@ fn content_reject_reason(title: &str, request_title: &NormalizedTitle) -> Option
             return None;
         }
         let in_annotation = annotation.contains(needle);
-        let extra_on_matching_title = t.contains(needle)
-            && !request_base.is_empty()
-            && t.contains(&request_base);
-        (in_annotation || extra_on_matching_title).then(|| format!("non-recording content: {label}"))
+        let extra_on_matching_title =
+            t.contains(needle) && !request_base.is_empty() && t.contains(&request_base);
+        (in_annotation || extra_on_matching_title)
+            .then(|| format!("non-recording content: {label}"))
     })
 }
 
@@ -488,9 +551,9 @@ fn apply_provider_prior(candidate: &Candidate, score: &mut f32, warnings: &mut V
 
 fn duration_reject_threshold_ms(strictness: DurationStrictness, _expected: u64) -> u64 {
     match strictness {
-        DurationStrictness::Strict => 15_000,   // 15s
-        DurationStrictness::Normal => 45_000,   // 45s
-        DurationStrictness::Loose => 120_000,   // 2min
+        DurationStrictness::Strict => 15_000, // 15s
+        DurationStrictness::Normal => 45_000, // 45s
+        DurationStrictness::Loose => 120_000, // 2min
     }
 }
 
@@ -502,7 +565,6 @@ fn fmt_duration(ms: u64) -> String {
 }
 
 // Re-export
-
 
 #[cfg(test)]
 mod tests {
@@ -517,6 +579,7 @@ mod tests {
             url: "https://youtu.be/test".into(),
             title: title.into(),
             uploader: Some("Uploader".into()),
+            channel_is_verified: None,
             duration_ms,
             thumbnail_url: None,
             view_count: None,
@@ -526,7 +589,11 @@ mod tests {
         }
     }
 
-    fn with_provider_and_views(mut candidate: Candidate, provider: &str, views: Option<u64>) -> Candidate {
+    fn with_provider_and_views(
+        mut candidate: Candidate,
+        provider: &str,
+        views: Option<u64>,
+    ) -> Candidate {
         candidate.provider = provider.into();
         candidate.view_count = views;
         candidate
@@ -536,7 +603,13 @@ mod tests {
     fn hard_rejects_part_mismatch() {
         let req_norm = normalize_title("The Heart Pt. 2");
         let cand = make_candidate("The Heart Part 5", Some(332_000));
-        let score = score_candidate("Kendrick Lamar", &req_norm, &cand, Some(294_000), &ScorerConfig::default());
+        let score = score_candidate(
+            "Kendrick Lamar",
+            &req_norm,
+            &cand,
+            Some(294_000),
+            &ScorerConfig::default(),
+        );
         assert_eq!(score.status, ScoreStatus::Rejected);
         assert!(score.rejects.iter().any(|r| r.contains("mismatch")));
     }
@@ -545,7 +618,13 @@ mod tests {
     fn hard_rejects_reaction() {
         let req_norm = normalize_title("The Heart Pt. 2");
         let cand = make_candidate("The Heart Pt. 2 REACTION", Some(294_000));
-        let score = score_candidate("Kendrick Lamar", &req_norm, &cand, Some(294_000), &ScorerConfig::default());
+        let score = score_candidate(
+            "Kendrick Lamar",
+            &req_norm,
+            &cand,
+            Some(294_000),
+            &ScorerConfig::default(),
+        );
         assert_eq!(score.status, ScoreStatus::Rejected);
         assert!(score.rejects.iter().any(|r| r.contains("reaction")));
     }
@@ -557,7 +636,13 @@ mod tests {
             "The Black Eyed Peas - Let's Get It Started (Levity x Crankdat Remix)",
             Some(223_000),
         );
-        let score = score_candidate("Levity", &req_norm, &cand, Some(223_000), &ScorerConfig::default());
+        let score = score_candidate(
+            "Levity",
+            &req_norm,
+            &cand,
+            Some(223_000),
+            &ScorerConfig::default(),
+        );
 
         assert_ne!(score.status, ScoreStatus::Rejected);
         assert!(score.rejects.is_empty());
@@ -565,10 +650,170 @@ mod tests {
     }
 
     #[test]
+    fn allows_explicitly_requested_remix_with_parenthesized_version() {
+        let request = normalize_title("Wanderlust Snakehips remix");
+        let candidate = make_candidate("The Weeknd - Wanderlust (Snakehips Remix)", Some(223_000));
+        let score = score_candidate(
+            "The Weeknd",
+            &request,
+            &candidate,
+            None,
+            &ScorerConfig::default(),
+        );
+        assert_ne!(score.status, ScoreStatus::Rejected, "{score:?}");
+        assert!(score.rejects.is_empty());
+    }
+
+    #[test]
+    fn requested_remix_ranks_above_original_recording() {
+        let request = normalize_title("Wanderlust Snakehips remix");
+        let mut original = make_candidate("Wanderlust", Some(307_000));
+        original.uploader = Some("The Weeknd".into());
+        let remix = make_candidate("The Weeknd - Wanderlust (Snakehips Remix)", Some(223_000));
+        let original_score = score_candidate(
+            "The Weeknd",
+            &request,
+            &original,
+            None,
+            &ScorerConfig::default(),
+        );
+        let remix_score = score_candidate(
+            "The Weeknd",
+            &request,
+            &remix,
+            None,
+            &ScorerConfig::default(),
+        );
+        assert!(
+            remix_score.confidence > original_score.confidence,
+            "remix: {remix_score:?}, original: {original_score:?}"
+        );
+        assert!(original_score
+            .warnings
+            .iter()
+            .any(|w| w.contains("requested remix")));
+        assert!(!original_score.positives.iter().any(|p| p == "title exact"));
+
+        original.channel_is_verified = Some(true);
+        let parenthesized = normalize_title("Wanderlust (Snakehips Remix)");
+        let original_score = score_candidate(
+            "The Weeknd",
+            &parenthesized,
+            &original,
+            Some(307_000),
+            &ScorerConfig::default(),
+        );
+        let remix_score = score_candidate(
+            "The Weeknd",
+            &parenthesized,
+            &remix,
+            Some(307_000),
+            &ScorerConfig::default(),
+        );
+        assert!(
+            remix_score.confidence > original_score.confidence,
+            "remix: {remix_score:?}, original: {original_score:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_channel_is_not_claimed_to_be_unofficial() {
+        let request = normalize_title("Wanderlust");
+        let mut candidate = make_candidate("Wanderlust", Some(307_000));
+        candidate.uploader = Some("The Weeknd".into());
+        let score = score_candidate(
+            "The Weeknd",
+            &request,
+            &candidate,
+            None,
+            &ScorerConfig::default(),
+        );
+        assert!(!score.warnings.iter().any(|w| w == "unofficial upload"));
+    }
+
+    #[test]
+    fn identifies_verified_matching_artist_channel() {
+        let request = normalize_title("Wanderlust");
+        let mut candidate = make_candidate("Wanderlust", Some(307_000));
+        candidate.uploader = Some("The Weeknd".into());
+        candidate.channel_is_verified = Some(true);
+        let score = score_candidate(
+            "The Weeknd",
+            &request,
+            &candidate,
+            None,
+            &ScorerConfig::default(),
+        );
+        assert!(score
+            .positives
+            .iter()
+            .any(|p| p == "verified artist channel"));
+        assert!(!score
+            .warnings
+            .iter()
+            .any(|w| w == "artist affiliation unconfirmed"));
+    }
+
+    #[test]
+    fn verified_unrelated_channel_is_not_identified_as_artist() {
+        let request = normalize_title("Wanderlust");
+        let mut candidate = make_candidate("The Weeknd - Wanderlust", Some(307_000));
+        candidate.uploader = Some("Majestic Casual".into());
+        candidate.channel_is_verified = Some(true);
+        let score = score_candidate(
+            "The Weeknd",
+            &request,
+            &candidate,
+            None,
+            &ScorerConfig::default(),
+        );
+        assert!(!score
+            .positives
+            .iter()
+            .any(|p| p == "verified artist channel"));
+    }
+
+    #[test]
+    fn rejects_a_different_remix_when_a_version_is_requested() {
+        let request = normalize_title("Wanderlust Snakehips remix");
+        let candidate = make_candidate("The Weeknd - Wanderlust (Other Remix)", Some(223_000));
+        let score = score_candidate(
+            "The Weeknd",
+            &request,
+            &candidate,
+            None,
+            &ScorerConfig::default(),
+        );
+        assert_eq!(score.status, ScoreStatus::Rejected);
+        assert!(score.rejects.iter().any(|reason| reason == "remix"));
+    }
+
+    #[test]
+    fn rejects_wrong_remixer_for_parenthesized_request() {
+        let request = normalize_title("Wanderlust (Snakehips Remix)");
+        let candidate = make_candidate("The Weeknd - Wanderlust (Pharrell Remix)", Some(223_000));
+        let score = score_candidate(
+            "The Weeknd",
+            &request,
+            &candidate,
+            None,
+            &ScorerConfig::default(),
+        );
+        assert_eq!(score.status, ScoreStatus::Rejected);
+        assert!(score.rejects.iter().any(|reason| reason == "remix"));
+    }
+
+    #[test]
     fn hard_rejects_unmatched_remix() {
         let req_norm = normalize_title("Let's Get It Started");
         let cand = make_candidate("Toxic (Levity Remix)", Some(223_000));
-        let score = score_candidate("Levity", &req_norm, &cand, Some(223_000), &ScorerConfig::default());
+        let score = score_candidate(
+            "Levity",
+            &req_norm,
+            &cand,
+            Some(223_000),
+            &ScorerConfig::default(),
+        );
 
         assert_eq!(score.status, ScoreStatus::Rejected);
         assert!(score.rejects.iter().any(|r| r == "remix"));
@@ -579,7 +824,13 @@ mod tests {
         let req_norm = normalize_title("The Heart Pt. 2");
         let mut cand = make_candidate("Kendrick Lamar - The Heart Pt. 2", Some(294_000));
         cand.uploader = Some("Kendrick Archive".into());
-        let score = score_candidate("Kendrick Lamar", &req_norm, &cand, Some(294_000), &ScorerConfig::default());
+        let score = score_candidate(
+            "Kendrick Lamar",
+            &req_norm,
+            &cand,
+            Some(294_000),
+            &ScorerConfig::default(),
+        );
         assert_eq!(score.status, ScoreStatus::Recommended);
         assert!(score.confidence > 80);
     }
@@ -588,16 +839,31 @@ mod tests {
     fn lyrics_marked_uncertain() {
         let req_norm = normalize_title("The Heart Pt. 2");
         let cand = make_candidate("Kendrick Lamar - The Heart Part 2 Lyrics", Some(294_000));
-        let score = score_candidate("Kendrick Lamar", &req_norm, &cand, Some(294_000), &ScorerConfig::default());
+        let score = score_candidate(
+            "Kendrick Lamar",
+            &req_norm,
+            &cand,
+            Some(294_000),
+            &ScorerConfig::default(),
+        );
         // Lyrics is soft marker by default → uncertain not rejected
-        assert!(matches!(score.status, ScoreStatus::Uncertain | ScoreStatus::Recommended));
+        assert!(matches!(
+            score.status,
+            ScoreStatus::Uncertain | ScoreStatus::Recommended
+        ));
     }
 
     #[test]
     fn strong_title_match_survives_bad_reference_duration() {
         let req_norm = normalize_title("The Heart Pt. 2");
         let cand = make_candidate("Kendrick Lamar - The Heart Pt. 2", Some(296_000));
-        let score = score_candidate("Kendrick Lamar", &req_norm, &cand, Some(224_000), &ScorerConfig::default());
+        let score = score_candidate(
+            "Kendrick Lamar",
+            &req_norm,
+            &cand,
+            Some(224_000),
+            &ScorerConfig::default(),
+        );
         assert_ne!(score.status, ScoreStatus::Rejected);
         assert!(score.rejects.is_empty());
         assert!(score.warnings.iter().any(|w| w.contains("duration")));
@@ -606,25 +872,59 @@ mod tests {
     #[test]
     fn analysis_video_scores_below_full_track_when_duration_reference_bad() {
         let req_norm = normalize_title("The Heart Pt. 2");
-        let analysis = make_candidate("Kendrick Lamar, The Heart Part 2 | Rhyme Scheme Highlighted", Some(216_000));
+        let analysis = make_candidate(
+            "Kendrick Lamar, The Heart Part 2 | Rhyme Scheme Highlighted",
+            Some(216_000),
+        );
         let track = make_candidate("Kendrick Lamar - The Heart Pt. 2 - Lyrics", Some(294_000));
-        let analysis_score = score_candidate("Kendrick Lamar", &req_norm, &analysis, Some(224_000), &ScorerConfig::default());
-        let track_score = score_candidate("Kendrick Lamar", &req_norm, &track, Some(224_000), &ScorerConfig::default());
+        let analysis_score = score_candidate(
+            "Kendrick Lamar",
+            &req_norm,
+            &analysis,
+            Some(224_000),
+            &ScorerConfig::default(),
+        );
+        let track_score = score_candidate(
+            "Kendrick Lamar",
+            &req_norm,
+            &track,
+            Some(224_000),
+            &ScorerConfig::default(),
+        );
 
-        assert_eq!(analysis_score.status, ScoreStatus::Rejected, "{analysis_score:?}");
-        assert!(analysis_score.rejects.iter().any(|reason| reason.contains("analysis")));
+        assert_eq!(
+            analysis_score.status,
+            ScoreStatus::Rejected,
+            "{analysis_score:?}"
+        );
+        assert!(analysis_score
+            .rejects
+            .iter()
+            .any(|reason| reason.contains("analysis")));
         assert_ne!(track_score.status, ScoreStatus::Rejected, "{track_score:?}");
-        assert!(track_score.confidence > analysis_score.confidence, "track={track_score:?} analysis={analysis_score:?}");
+        assert!(
+            track_score.confidence > analysis_score.confidence,
+            "track={track_score:?} analysis={analysis_score:?}"
+        );
     }
 
     #[test]
     fn real_title_breakdown_is_not_an_analysis_reject() {
         let req_norm = normalize_title("Breakdown");
         let track = make_candidate("Artist - Breakdown", Some(200_000));
-        let score = score_candidate("Artist", &req_norm, &track, Some(200_000), &ScorerConfig::default());
+        let score = score_candidate(
+            "Artist",
+            &req_norm,
+            &track,
+            Some(200_000),
+            &ScorerConfig::default(),
+        );
 
         assert!(
-            score.rejects.iter().all(|reason| !reason.contains("analysis")),
+            score
+                .rejects
+                .iter()
+                .all(|reason| !reason.contains("analysis")),
             "{score:?}"
         );
     }
@@ -633,10 +933,19 @@ mod tests {
     fn parenthetical_analysis_tag_is_rejected() {
         let req_norm = normalize_title("Song");
         let analysis = make_candidate("Artist - Song (Analysis)", Some(200_000));
-        let score = score_candidate("Artist", &req_norm, &analysis, Some(200_000), &ScorerConfig::default());
+        let score = score_candidate(
+            "Artist",
+            &req_norm,
+            &analysis,
+            Some(200_000),
+            &ScorerConfig::default(),
+        );
 
         assert_eq!(score.status, ScoreStatus::Rejected, "{score:?}");
-        assert!(score.rejects.iter().any(|reason| reason.contains("analysis")));
+        assert!(score
+            .rejects
+            .iter()
+            .any(|reason| reason.contains("analysis")));
     }
 
     #[test]
@@ -645,13 +954,23 @@ mod tests {
         let candidates = vec![
             make_candidate("Kendrick Lamar - The Heart Pt. 2", Some(294_000)),
             make_candidate("Kendrick Lamar - The Heart Pt. 2 - Lyrics", Some(296_000)),
-            make_candidate("Kendrick Lamar ft. Dash Snow - The Heart Pt 2", Some(297_000)),
-            make_candidate("Kendrick Lamar, The Heart Part 2 | Rhyme Scheme Highlighted", Some(216_000)),
+            make_candidate(
+                "Kendrick Lamar ft. Dash Snow - The Heart Pt 2",
+                Some(297_000),
+            ),
+            make_candidate(
+                "Kendrick Lamar, The Heart Part 2 | Rhyme Scheme Highlighted",
+                Some(216_000),
+            ),
             make_candidate("Kendrick Lamar - The Heart Part 5", Some(332_000)),
         ];
 
-        let inferred = infer_consensus_duration_ms("Kendrick Lamar", &req_norm, &candidates).unwrap();
-        assert!((294_000..=297_000).contains(&inferred), "inferred={inferred}");
+        let inferred =
+            infer_consensus_duration_ms("Kendrick Lamar", &req_norm, &candidates).unwrap();
+        assert!(
+            (294_000..=297_000).contains(&inferred),
+            "inferred={inferred}"
+        );
     }
 
     #[test]
@@ -663,7 +982,10 @@ mod tests {
             make_candidate("Kendrick Lamar - The Heart Pt. 2", Some(86_000)),
         ];
 
-        assert_eq!(infer_consensus_duration_ms("Kendrick Lamar", &req_norm, &candidates), None);
+        assert_eq!(
+            infer_consensus_duration_ms("Kendrick Lamar", &req_norm, &candidates),
+            None
+        );
     }
 
     #[test]
@@ -680,10 +1002,28 @@ mod tests {
             Some(100),
         );
 
-        let popular_score = score_candidate("Kendrick Lamar", &req_norm, &popular, Some(294_000), &ScorerConfig::default());
-        let low_score = score_candidate("Kendrick Lamar", &req_norm, &low_popularity, Some(294_000), &ScorerConfig::default());
+        let popular_score = score_candidate(
+            "Kendrick Lamar",
+            &req_norm,
+            &popular,
+            Some(294_000),
+            &ScorerConfig::default(),
+        );
+        let low_score = score_candidate(
+            "Kendrick Lamar",
+            &req_norm,
+            &low_popularity,
+            Some(294_000),
+            &ScorerConfig::default(),
+        );
 
-        assert!(popular_score.confidence > low_score.confidence, "popular={popular_score:?} low={low_score:?}");
-        assert!(low_score.warnings.iter().any(|w| w.contains("low popularity")));
+        assert!(
+            popular_score.confidence > low_score.confidence,
+            "popular={popular_score:?} low={low_score:?}"
+        );
+        assert!(low_score
+            .warnings
+            .iter()
+            .any(|w| w.contains("low popularity")));
     }
 }

@@ -1,9 +1,9 @@
 import Foundation
 
 enum Destination: String, CaseIterable, Identifiable {
-    case addMusic = "Add Music", reviewQueue = "Review Queue", discover = "Discover", activity = "Activity", library = "Library"
+    case addMusic = "Add Music", reviewQueue = "Review Queue", discover = "Discover", bookmarks = "Bookmarks", activity = "Activity", library = "Library"
     var id: String { rawValue }
-    var symbol: String { switch self { case .addMusic: "plus.circle.fill"; case .reviewQueue: "list.bullet.rectangle"; case .discover: "sparkles"; case .activity: "clock.fill"; case .library: "music.note.list" } }
+    var symbol: String { switch self { case .addMusic: "plus.circle.fill"; case .reviewQueue: "list.bullet.rectangle"; case .discover: "sparkles"; case .bookmarks: "bookmark.fill"; case .activity: "clock.fill"; case .library: "music.note.list" } }
 }
 
 struct NeedleSettings: Codable, Equatable {
@@ -95,6 +95,8 @@ struct Candidate: Codable {
     let url: String
     let title: String
     let uploader: String?
+    /// Whether the provider reports the uploader channel as verified.
+    let channelIsVerified: Bool?
     let durationMs: Int?
     let thumbnailURL: String?
     /// View count reported by the source provider, when available.
@@ -106,13 +108,14 @@ struct Candidate: Codable {
     var audioBitrateKbps: UInt32? = nil
 
     init(provider: String, id: String, url: String, title: String, uploader: String?,
-         durationMs: Int?, thumbnailURL: String?, viewCount: UInt64? = nil,
+         durationMs: Int?, thumbnailURL: String?, channelIsVerified: Bool? = nil, viewCount: UInt64? = nil,
          audioCodec: String? = nil, audioBitrateKbps: UInt32? = nil) {
         self.provider = provider
         self.id = id
         self.url = url
         self.title = title
         self.uploader = uploader
+        self.channelIsVerified = channelIsVerified
         self.durationMs = durationMs
         self.thumbnailURL = thumbnailURL
         self.viewCount = viewCount
@@ -121,7 +124,8 @@ struct Candidate: Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case provider, id, url, title, uploader, durationMs
+        case provider, id, url, title, uploader, durationMs, channelIsVerified
+        case channelIsVerifiedSnake = "channel_is_verified"
         case thumbnailURL = "thumbnailUrl"
         case viewCount
         case viewCountSnake = "view_count"
@@ -138,6 +142,8 @@ struct Candidate: Codable {
         url = try container.decode(String.self, forKey: .url)
         title = try container.decode(String.self, forKey: .title)
         uploader = try container.decodeIfPresent(String.self, forKey: .uploader)
+        channelIsVerified = try container.decodeIfPresent(Bool.self, forKey: .channelIsVerified)
+            ?? (try container.decodeIfPresent(Bool.self, forKey: .channelIsVerifiedSnake))
         durationMs = try container.decodeIfPresent(Int.self, forKey: .durationMs)
         thumbnailURL = try container.decodeIfPresent(String.self, forKey: .thumbnailURL)
         viewCount = try container.decodeIfPresent(UInt64.self, forKey: .viewCount)
@@ -155,6 +161,7 @@ struct Candidate: Codable {
         try container.encode(url, forKey: .url)
         try container.encode(title, forKey: .title)
         try container.encodeIfPresent(uploader, forKey: .uploader)
+        try container.encodeIfPresent(channelIsVerified, forKey: .channelIsVerifiedSnake)
         try container.encodeIfPresent(durationMs, forKey: .durationMs)
         try container.encodeIfPresent(thumbnailURL, forKey: .thumbnailURL)
         try container.encodeIfPresent(viewCount, forKey: .viewCountSnake)

@@ -140,9 +140,13 @@ final class ReviewQueueTests: XCTestCase {
         search)
           printf '%s\n' '{"ok":true,"candidates":[{"candidate":{"provider":"test","id":"exact","url":"https://example.com/exact","title":"A - T"},"score":{"status":"recommended","positives":[],"warnings":[],"rejects":[]}}]}'
           ;;
+        prepare)
+          printf '%s\n' '{"artist":"A","title":"T","album":"","album_artist":"A","artwork_url":"","source":"request","warnings":[],"source_url":"https://example.com/exact"}'
+          ;;
         get)
+          case "$*" in *'"title":"Reviewed"'*) ;; *) exit 1 ;; esac
           sleep 1
-          printf '%s\n' '{"ok":true,"saved_path":"/tmp/needle-queue-test.mp3","artist":"A","title":"T","album":"","source_url":"https://example.com/exact"}'
+          printf '%s\n' '{"ok":true,"saved_path":"/tmp/needle-queue-test.mp3","artist":"A","title":"Reviewed","album":"","source_url":"https://example.com/exact"}'
           ;;
         esac
         """#
@@ -162,7 +166,10 @@ final class ReviewQueueTests: XCTestCase {
         queue.approve(foreign, itemID: first.id, spotify: false)
         XCTAssertEqual(queue.items[0].state, .ready)
         XCTAssertTrue(history.tracks.isEmpty)
-        queue.approve(candidate, itemID: first.id, spotify: false)
+        let prepared = await queue.prepareMetadata(candidate, itemID: first.id)
+        var draft = try XCTUnwrap(prepared)
+        draft.title = "Reviewed"
+        queue.approve(candidate, itemID: first.id, spotify: false, approved: draft)
         XCTAssertEqual(queue.activeDownloads, 1)
         queue.add("Second — Recording", settings: settings)
         try await wait { queue.items.last?.state == .ready }

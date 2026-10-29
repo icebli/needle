@@ -20,7 +20,12 @@ test("companion installer registers hosts against an installed app without touch
 
   execFileSync("bash", [installer], {
     cwd: repo,
-    env: { ...process.env, HOME: quotedHome, NEEDLE_COMPANION_NO_OPEN: "1" },
+    env: {
+      ...process.env,
+      HOME: quotedHome,
+      NEEDLE_APP_PATH: path.join(quotedHome, "Applications/Needle.app"),
+      NEEDLE_COMPANION_NO_OPEN: "1",
+    },
     input: "\n",
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -32,7 +37,9 @@ test("companion installer registers hosts against an installed app without touch
   assert.deepEqual(firefoxManifest.allowed_extensions, ["needle@tege.dev"]);
   assert.equal(fs.readFileSync(path.join(support, "Google/Chrome/NativeMessagingHosts/dev.tege.needle.browser.json"), "utf8").includes("needle-local-playlist"), false);
   const wrapper = path.join(support, "Needle/bin/needle-browser-host");
-  assert.match(fs.readFileSync(wrapper, "utf8"), /Contents\/Resources\/bin/);
+  const wrapperText = fs.readFileSync(wrapper, "utf8");
+  const shellEscapedHost = execFileSync("bash", ["-c", "printf '%q' \"$1\"", "bash", host], { encoding: "utf8" });
+  assert.ok(wrapperText.split("\n").includes(`exec ${shellEscapedHost} "$@"`));
   execFileSync(wrapper, ["quote-safe"], { env: { ...process.env, HOME: quotedHome } });
 });
 

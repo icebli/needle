@@ -143,6 +143,51 @@ final class DiscoveryStore {
         }
     }
 
+    func refreshCatalog(lookup: ((String, String) async throws -> [SpotifyCatalogTrack])? = nil) {
+        guard !isSearching, !isSyncing, !recordings.isEmpty else { return }
+        let pending = recordings
+        isSearching = true; catalogNotice = nil
+        progress = "Refreshing Spotify checks…"
+        task = Task {
+            defer { isSearching = false; progress = ""; persist() }
+            var checked = 0
+            var found = 0
+            for (index, recording) in pending.enumerated() {
+                do {
+                    try Task.checkCancellation()
+                    progress = "Checking Spotify \(checked + 1)/\(pending.count): \(recording.artist.name) — \(recording.title)"
+                    let tracks: [SpotifyCatalogTrack]
+                    if let lookup { tracks = try await lookup(recording.artist.name, recording.title) }
+                    else { tracks = try await spotify.catalog(artist: recording.artist.name, title: recording.title) }
+                    try Task.checkCancellation()
+                    let match = DiscoveryMatching.matchingTrack(tracks, artist: recording.artist, title: recording.title)
+                    var updated = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
+                        availability: match == nil ? .noMatch : .found, catalogURI: match?.uri)
+                    if match == nil { updated.detail = "No exact artist/title/version match in Spotify’s search results. Availability varies by region." }
+                    recordings[index] = updated
+                    checked += 1
+                    if match != nil { found += 1 }
+                    if checked < pending.count { try await Task.sleep(for: .milliseconds(350)) }
+                } catch is CancellationError {
+                    catalogNotice = "Spotify refresh stopped. Completed \(checked) of \(pending.count) checks."
+                    return
+                } catch {
+                    if Task.isCancelled {
+                        catalogNotice = "Spotify refresh stopped. Completed \(checked) of \(pending.count) checks."
+                        return
+                    }
+                    recordings[index] = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
+                        availability: .unknown, detail: error.localizedDescription)
+                    // Authentication, rate-limit, and companion failures must not
+                    // turn unchecked recordings into presumed catalog absences.
+                    catalogNotice = "Spotify refresh stopped after \(checked) of \(pending.count) checks: \(error.localizedDescription)"
+                    return
+                }
+            }
+            catalogNotice = "Refreshed \(checked) Spotify checks: \(found) found, \(checked - found) without an exact match."
+        }
+    }
+
     static func candidateLimit(artistCount: Int) -> Int {
         45 / max(1, min(artistCount, 5))
     }

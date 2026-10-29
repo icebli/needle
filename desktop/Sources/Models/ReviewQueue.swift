@@ -29,6 +29,7 @@ struct ReviewItem: Codable, Identifiable {
     var state: ReviewState = .queued
     var response: SearchResponse?
     var approvedCandidate: CandidateResult?
+    var approvedMetadata: MetadataDraft?
     var queueSpotify = false
     var trackID: UUID?
     var detail: String?
@@ -133,11 +134,31 @@ final class ReviewQueue {
         if !items.contains(where: { $0.id == selectedID }) { selectedID = items.first?.id }
     }
 
-    func approve(_ candidate: CandidateResult, itemID: UUID, spotify: Bool) {
+    func prepareMetadata(_ candidate: CandidateResult, itemID: UUID) async -> MetadataDraft? {
+        guard let item = items.first(where: { $0.id == itemID }), item.state == .ready,
+              candidate.score.status != "rejected",
+              item.response?.candidates.contains(where: { $0.id == candidate.id && $0.candidate.url == candidate.candidate.url }) == true else { return nil }
+        let service = NeedleCLIService()
+        let result = await service.prepareMetadata(artist: item.artist, title: item.title, candidate: candidate.candidate, settings: item.settings)
+        guard !Task.isCancelled, var current = items.first(where: { $0.id == itemID }),
+              current.state == .ready, current.artist == item.artist, current.title == item.title,
+              current.sourceURL == item.sourceURL, current.settings == item.settings,
+              current.response?.candidates.contains(where: { $0.id == candidate.id && $0.candidate.url == candidate.candidate.url }) == true else { return nil }
+        switch result {
+        case .success(let draft): return draft
+        case .failure(let error):
+            current.detail = error.localizedDescription
+            update(current)
+            return nil
+        }
+    }
+
+    func approve(_ candidate: CandidateResult, itemID: UUID, spotify: Bool, approved: MetadataDraft? = nil) {
         guard var item = items.first(where: { $0.id == itemID }), item.state == .ready,
               candidate.score.status != "rejected", AppModel.mediaURL(candidate.candidate.url) != nil,
+              approved?.sourceURL == candidate.candidate.url,
               item.response?.candidates.contains(where: { $0.id == candidate.id && $0.candidate.url == candidate.candidate.url }) == true else { return }
-        item.approvedCandidate = candidate; item.queueSpotify = spotify && item.settings.format == "mp3"
+        item.approvedCandidate = candidate; item.approvedMetadata = approved; item.queueSpotify = spotify && item.settings.format == "mp3"
         item.state = .approved; item.detail = nil; update(item)
         downloadNext()
         selectNext(after: itemID)
@@ -202,7 +223,8 @@ final class ReviewQueue {
 
     private func downloadNext() {
         while downloads.count < 2, var item = items.first(where: { $0.state == .approved }) {
-            guard let candidate = item.approvedCandidate else { item.state = .ready; update(item); continue }
+            guard let candidate = item.approvedCandidate, let tags = item.approvedMetadata,
+                  tags.sourceURL == candidate.candidate.url else { item.state = .ready; update(item); continue }
             let service = NeedleCLIService()
             downloads[item.id] = service
             item.state = .downloading
@@ -211,8 +233,8 @@ final class ReviewQueue {
                                      sourceURL: candidate.candidate.url, stage: .metadata, settingsSnapshot: item.settings)
             item.trackID = track.id; update(item); history.upsert(track)
             let approved = item
-            Task {
-                let result = await service.get(track: track, settings: approved.settings, onProgress: { [weak self] stage in
+            Task { [self] in
+                let result = await service.get(track: track, settings: approved.settings, approved: tags, onProgress: { [weak self] stage in
                     Task { @MainActor in
                         guard let self, self.downloads[approved.id] != nil,
                               var current = self.history.tracks.first(where: { $0.id == track.id }),

@@ -25,7 +25,10 @@ if [[ "$CONFIGURATION" != "debug" && "$CONFIGURATION" != "release" ]]; then
 fi
 
 cargo build --manifest-path "$REPO_DIR/Cargo.toml" --release -p needle-cli -p needle-browser-host
-swift build --package-path "$REPO_DIR/desktop" -c "$CONFIGURATION" --product NeedleDesktop
+SDK_VERSION="$(xcrun --sdk macosx --show-sdk-version)"
+# SwiftPM can otherwise stamp the deployment target as the linked SDK version.
+swift build --package-path "$REPO_DIR/desktop" -c "$CONFIGURATION" --product NeedleDesktop \
+  -Xlinker -platform_version -Xlinker macos -Xlinker 14.0 -Xlinker "$SDK_VERSION"
 BIN_DIR="$(swift build --package-path "$REPO_DIR/desktop" -c "$CONFIGURATION" --show-bin-path)"
 SPARKLE_SOURCE="$REPO_DIR/desktop/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 [[ -d "$SPARKLE_SOURCE" ]] || { echo "SwiftPM did not resolve Sparkle.framework." >&2; exit 1; }

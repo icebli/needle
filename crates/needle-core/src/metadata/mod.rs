@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use anyhow::Result;
-use tracing::debug;
 use crate::normalize::normalize_title;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 /// Authoritative metadata for a track (from MusicBrainz, Apple, etc.)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -62,32 +62,79 @@ pub async fn resolve_metadata(artist: &str, title: &str) -> Result<Option<TrackM
     // Prefer plausible full-length Apple/store metadata over short MusicBrainz
     // snippets/interviews. The scorer treats duration as high-trust, so bad
     // reference duration is worse than missing duration.
-    let chosen = match (musicbrainz, apple) {
-        (Some(mb), Some(ap)) => {
-            let mb_score = metadata_plausibility_score(artist, title, &mb);
-            let ap_score = metadata_plausibility_score(artist, title, &ap);
-            if ap_score > mb_score { ap } else { mb }
-        }
-        (Some(mb), None) => mb,
-        (None, Some(ap)) => ap,
-        (None, None) => return Ok(None),
+    let chosen = choose_plausible_metadata(artist, title, musicbrainz, apple);
+    let Some(chosen) = chosen else {
+        return Ok(None);
     };
 
     debug!("metadata resolved: {} - {}", chosen.artist, chosen.title);
     Ok(Some(chosen))
 }
 
-fn metadata_plausibility_score(request_artist: &str, request_title: &str, meta: &TrackMetadata) -> i32 {
+fn choose_plausible_metadata(
+    artist: &str,
+    title: &str,
+    musicbrainz: Option<TrackMetadata>,
+    apple: Option<TrackMetadata>,
+) -> Option<TrackMetadata> {
+    match (musicbrainz, apple) {
+        (Some(mb), Some(ap)) => {
+            let mb_score = metadata_plausibility_score(artist, title, &mb);
+            let ap_score = metadata_plausibility_score(artist, title, &ap);
+            match (mb_score >= 35, ap_score >= 35) {
+                (true, true) if ap_score > mb_score => Some(ap),
+                (true, true) | (true, false) => Some(mb),
+                (false, true) => Some(ap),
+                (false, false) => None,
+            }
+        }
+        (Some(mb), None) => (metadata_plausibility_score(artist, title, &mb) >= 35).then_some(mb),
+        (None, Some(ap)) => (metadata_plausibility_score(artist, title, &ap) >= 35).then_some(ap),
+        (None, None) => None,
+    }
+}
+
+fn metadata_plausibility_score(
+    request_artist: &str,
+    request_title: &str,
+    meta: &TrackMetadata,
+) -> i32 {
     let req = normalize_title(request_title);
     let got = normalize_title(&meta.title);
+    let album_markers = meta
+        .album
+        .as_deref()
+        .map(normalize_title)
+        .map(|title| title.negative_markers)
+        .unwrap_or_default();
+    let mut returned_derivative_markers = got.negative_markers.iter().chain(album_markers.iter());
 
-    // Hard reject: metadata title has negative markers (remix, waowmix, reaction, etc.)
-    if !got.negative_markers.is_empty() {
+    // Explicit remixes must match the named remix; originals and other
+    // derivative variants must never be selected implicitly.
+    let requested_remix = req
+        .negative_markers
+        .contains(&crate::normalize::NegativeMarker::Remix);
+    let returned_remix = got
+        .negative_markers
+        .contains(&crate::normalize::NegativeMarker::Remix);
+    if requested_remix {
+        if !returned_remix
+            || !variant_tokens_match(&req, &got)
+            || returned_derivative_markers
+                .any(|marker| *marker != crate::normalize::NegativeMarker::Remix)
+        {
+            return -100;
+        }
+    } else if returned_derivative_markers.next().is_some() {
         return -100;
     }
 
     let mut score = 0;
-    if meta.artist.to_ascii_lowercase().contains(&request_artist.to_ascii_lowercase()) {
+    if meta
+        .artist
+        .to_ascii_lowercase()
+        .contains(&request_artist.to_ascii_lowercase())
+    {
         score += 30;
     }
     if got.base_title.contains(&req.base_title) || req.base_title.contains(&got.base_title) {
@@ -99,9 +146,15 @@ fn metadata_plausibility_score(request_artist: &str, request_title: &str, meta: 
         (Some(_), None) => score -= 10,
         _ => {}
     }
-    if meta.album.is_some() { score += 5; }
-    if meta.track_number.is_some() { score += 5; }
-    if meta.artwork_url.is_some() { score += 5; }
+    if meta.album.is_some() {
+        score += 5;
+    }
+    if meta.track_number.is_some() {
+        score += 5;
+    }
+    if meta.artwork_url.is_some() {
+        score += 5;
+    }
     match meta.duration_ms {
         Some(ms) if (120_000..=900_000).contains(&ms) => score += 20,
         Some(ms) if ms < 120_000 => score -= 60,
@@ -110,6 +163,23 @@ fn metadata_plausibility_score(request_artist: &str, request_title: &str, meta: 
         _ => {}
     }
     score
+}
+
+fn variant_tokens_match(
+    request: &crate::normalize::NormalizedTitle,
+    got: &crate::normalize::NormalizedTitle,
+) -> bool {
+    let got_tokens: std::collections::HashSet<String> = got
+        .raw
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+    request
+        .raw
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .all(|token| got_tokens.contains(&token.to_ascii_lowercase()))
 }
 
 // ─── MusicBrainz ─────────────────────────────────────────────────────────────
@@ -205,13 +275,23 @@ async fn fetch_release_canonical_url(client: &reqwest::Client, release_id: &str)
         "https://musicbrainz.org/ws/2/release/{}?fmt=json&inc=url-rels",
         release_id
     );
-    let resp = client.get(&url)
+    let resp = client
+        .get(&url)
         .header("User-Agent", "needle/0.1.0 (needle@example.com)")
-        .send().await.ok()?;
-    if !resp.status().is_success() { return None; }
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
     let result: MbReleaseUrlResult = resp.json().await.ok()?;
     // Prefer "free streaming" then "streaming" then any audio source
-    let priority = ["free streaming", "streaming", "download for free", "purchase for download"];
+    let priority = [
+        "free streaming",
+        "streaming",
+        "download for free",
+        "purchase for download",
+    ];
     for ptype in priority {
         if let Some(rel) = result.relations.iter().find(|r| r.rel_type == ptype) {
             return Some(rel.url.resource.clone());
@@ -244,7 +324,8 @@ async fn resolve_musicbrainz(artist: &str, title: &str) -> Result<Option<TrackMe
             Ok(r) if r.status().is_success() => {
                 // Success — proceed with processing
                 let result: MbSearchResult = r.json().await?;
-                let best = result.recordings
+                let best = result
+                    .recordings
                     .into_iter()
                     .map(|rec| {
                         let mut meta = mb_recording_to_metadata(artist, title, rec);
@@ -259,9 +340,8 @@ async fn resolve_musicbrainz(artist: &str, title: &str) -> Result<Option<TrackMe
                 // If we got a match, try to fetch canonical streaming URL from the preferred release
                 let best = if let Some(mut meta) = best {
                     if let Some(ref release_id) = meta.source.preferred_release_id.clone() {
-                        meta.source.canonical_url = fetch_release_canonical_url_with_retry(
-                            &client, release_id, 2
-                        ).await;
+                        meta.source.canonical_url =
+                            fetch_release_canonical_url_with_retry(&client, release_id, 2).await;
                         if let Some(ref url) = meta.source.canonical_url {
                             debug!("MB canonical URL: {}", url);
                         }
@@ -275,12 +355,17 @@ async fn resolve_musicbrainz(artist: &str, title: &str) -> Result<Option<TrackMe
             }
             Ok(r) if r.status().as_u16() == 429 => {
                 // Rate limited — extract Retry-After header, or backoff exponentially
-                let wait = r.headers()
+                let wait = r
+                    .headers()
                     .get("retry-after")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok())
                     .unwrap_or(2u64.pow(attempt as u32));
-                debug!("MB rate limited (attempt {}), waiting {}s", attempt + 1, wait);
+                debug!(
+                    "MB rate limited (attempt {}), waiting {}s",
+                    attempt + 1,
+                    wait
+                );
                 tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
                 last_err = Some(anyhow::anyhow!("rate limited (429)"));
             }
@@ -288,21 +373,26 @@ async fn resolve_musicbrainz(artist: &str, title: &str) -> Result<Option<TrackMe
                 let status = r.status();
                 debug!("MB returned {} (attempt {})", status, attempt + 1);
                 if attempt + 1 < max_retries {
-                    tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt as u32))).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt as u32)))
+                        .await;
                 }
                 last_err = Some(anyhow::anyhow!("HTTP {}", status));
             }
             Err(e) => {
                 debug!("MB network error (attempt {}): {}", attempt + 1, e);
                 if attempt + 1 < max_retries {
-                    tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt as u32))).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(attempt as u32)))
+                        .await;
                 }
                 last_err = Some(anyhow::anyhow!("{}", e));
             }
         }
     }
 
-    debug!("MB all retries exhausted: {}", last_err.as_ref().map(|e| e.to_string()).unwrap_or_default());
+    debug!(
+        "MB all retries exhausted: {}",
+        last_err.as_ref().map(|e| e.to_string()).unwrap_or_default()
+    );
     Ok(None)
 }
 
@@ -318,7 +408,10 @@ async fn fetch_release_canonical_url_with_retry(
             None => {
                 // fetch_release_canonical_url returns None on non-200, so retry
                 if attempt + 1 < max_retries {
-                    tokio::time::sleep(std::time::Duration::from_millis(500 * (attempt as u64 + 1))).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        500 * (attempt as u64 + 1),
+                    ))
+                    .await;
                 }
             }
         }
@@ -334,12 +427,21 @@ fn mb_recording_to_metadata(artist: &str, title: &str, rec: MbRecording) -> Trac
     let preferred_release = {
         let mut best: Option<&MbRelease> = None;
         for rel in &rec.releases {
-            let rg_type = rel.release_group.as_ref().and_then(|g| g.primary_type.as_deref());
+            if is_unwanted_release_title(&rel.title, title) {
+                continue;
+            }
+            let rg_type = rel
+                .release_group
+                .as_ref()
+                .and_then(|g| g.primary_type.as_deref());
             // Does this release beat current best?
             best = match best {
                 None => Some(rel),
                 Some(current) => {
-                    let cur_type = current.release_group.as_ref().and_then(|g| g.primary_type.as_deref());
+                    let cur_type = current
+                        .release_group
+                        .as_ref()
+                        .and_then(|g| g.primary_type.as_deref());
                     // Rank: Single/Album/EP > known other > unknown > compilation/live
                     let rank = |t: Option<&str>| match t {
                         Some("Single") => 5,
@@ -358,7 +460,10 @@ fn mb_recording_to_metadata(artist: &str, title: &str, rec: MbRecording) -> Trac
                         let rec_title_lower = rec.title.to_ascii_lowercase();
                         let rel_match = rel.title.to_ascii_lowercase().contains(&rec_title_lower)
                             || rec_title_lower.contains(&rel.title.to_ascii_lowercase());
-                        let cur_match = current.title.to_ascii_lowercase().contains(&rec_title_lower)
+                        let cur_match = current
+                            .title
+                            .to_ascii_lowercase()
+                            .contains(&rec_title_lower)
                             || rec_title_lower.contains(&current.title.to_ascii_lowercase());
                         if rel_match && !cur_match {
                             Some(rel)
@@ -366,7 +471,11 @@ fn mb_recording_to_metadata(artist: &str, title: &str, rec: MbRecording) -> Trac
                             // Prefer fewer tracks (single vs compilation)
                             let rel_tc = rel.track_count.unwrap_or(99);
                             let cur_tc = current.track_count.unwrap_or(99);
-                            if rel_tc < cur_tc { Some(rel) } else { Some(current) }
+                            if rel_tc < cur_tc {
+                                Some(rel)
+                            } else {
+                                Some(current)
+                            }
                         } else {
                             Some(current)
                         }
@@ -388,10 +497,15 @@ fn mb_recording_to_metadata(artist: &str, title: &str, rec: MbRecording) -> Trac
         .and_then(|n| n.parse::<u32>().ok());
 
     // Primary artist = first credit; featured = rest
-    let primary_artist = rec.artist_credit.first()
+    let primary_artist = rec
+        .artist_credit
+        .first()
         .map(|a| a.name.clone())
         .unwrap_or_else(|| artist.to_string());
-    let featured_artists: Vec<String> = rec.artist_credit.iter().skip(1)
+    let featured_artists: Vec<String> = rec
+        .artist_credit
+        .iter()
+        .skip(1)
         .filter(|a| !a.name.trim().is_empty())
         .map(|a| a.name.clone())
         .collect();
@@ -431,7 +545,10 @@ mod tests {
     fn make_recording(title: &str, releases: Vec<MbRelease>) -> MbRecording {
         MbRecording {
             title: title.to_string(),
-            artist_credit: vec![MbArtistCredit { name: "TestArtist".into(), joinphrase: None }],
+            artist_credit: vec![MbArtistCredit {
+                name: "TestArtist".into(),
+                joinphrase: None,
+            }],
             length: Some(200_000),
             releases,
             isrcs: vec![],
@@ -439,7 +556,12 @@ mod tests {
         }
     }
 
-    fn release(id: &str, title: &str, track_count: Option<u32>, rg_type: Option<&str>) -> MbRelease {
+    fn release(
+        id: &str,
+        title: &str,
+        track_count: Option<u32>,
+        rg_type: Option<&str>,
+    ) -> MbRelease {
         MbRelease {
             id: id.into(),
             title: title.into(),
@@ -454,10 +576,13 @@ mod tests {
 
     #[test]
     fn prefers_known_single_over_unknown() {
-        let rec = make_recording("My Song", vec![
-            release("rel-1", "Compilation Album", Some(20), None),
-            release("rel-2", "Best of 2024", Some(15), Some("Single")),
-        ]);
+        let rec = make_recording(
+            "My Song",
+            vec![
+                release("rel-1", "Compilation Album", Some(20), None),
+                release("rel-2", "Best of 2024", Some(15), Some("Single")),
+            ],
+        );
         let meta = mb_recording_to_metadata("TestArtist", "My Song", rec);
         assert_eq!(meta.source.preferred_release_id.as_deref(), Some("rel-2"));
         assert_eq!(meta.album.as_deref(), Some("Best of 2024"));
@@ -465,52 +590,157 @@ mod tests {
 
     #[test]
     fn prefers_recording_title_match_when_rg_missing() {
-        let rec = make_recording("Look Out for Detox", vec![
-            release("rel-comp", "Compton State of Mind, Vol. 2", Some(11), None),
-            release("rel-single", "Look Out for Detox", Some(1), None),
-        ]);
+        let rec = make_recording(
+            "Look Out for Detox",
+            vec![
+                release("rel-comp", "Compton State of Mind, Vol. 2", Some(11), None),
+                release("rel-single", "Look Out for Detox", Some(1), None),
+            ],
+        );
         let meta = mb_recording_to_metadata("TestArtist", "Look Out for Detox", rec);
-        assert_eq!(meta.source.preferred_release_id.as_deref(), Some("rel-single"));
+        assert_eq!(
+            meta.source.preferred_release_id.as_deref(),
+            Some("rel-single")
+        );
         assert_eq!(meta.album.as_deref(), Some("Look Out for Detox"));
     }
 
     #[test]
     fn fewer_tracks_wins_when_neither_title_matches() {
-        let rec = make_recording("X", vec![
-            release("rel-1", "Various Artists", Some(15), None),
-            release("rel-2", "Summer Hits", Some(5), None)]);
+        let rec = make_recording(
+            "X",
+            vec![
+                release("rel-1", "Various Artists", Some(15), None),
+                release("rel-2", "Summer Hits", Some(5), None),
+            ],
+        );
         let meta = mb_recording_to_metadata("TestArtist", "X", rec);
         assert_eq!(meta.source.preferred_release_id.as_deref(), Some("rel-2"));
     }
 
     #[test]
     fn prefers_album_rg_over_ep() {
-        let rec = make_recording("Song", vec![
-            release("rel-ep", "Songs EP", Some(4), Some("EP")),
-            release("rel-album", "The Album", Some(12), Some("Album")),
-        ]);
+        let rec = make_recording(
+            "Song",
+            vec![
+                release("rel-ep", "Songs EP", Some(4), Some("EP")),
+                release("rel-album", "The Album", Some(12), Some("Album")),
+            ],
+        );
         let meta = mb_recording_to_metadata("TestArtist", "Song", rec);
-        assert_eq!(meta.source.preferred_release_id.as_deref(), Some("rel-album"));
+        assert_eq!(
+            meta.source.preferred_release_id.as_deref(),
+            Some("rel-album")
+        );
     }
 
     #[test]
     fn prefers_single_over_compilation_rg() {
-        let rec = make_recording("A", vec![
-            release("rel-comp", "Hits", Some(20), Some("Compilation")),
-            release("rel-single", "A", Some(1), Some("Single")),
-        ]);
+        let rec = make_recording(
+            "A",
+            vec![
+                release("rel-comp", "Hits", Some(20), Some("Compilation")),
+                release("rel-single", "A", Some(1), Some("Single")),
+            ],
+        );
         let meta = mb_recording_to_metadata("TestArtist", "A", rec);
-        assert_eq!(meta.source.preferred_release_id.as_deref(), Some("rel-single"));
+        assert_eq!(
+            meta.source.preferred_release_id.as_deref(),
+            Some("rel-single")
+        );
     }
 
     #[test]
     fn picks_only_release() {
-        let rec = make_recording("Lonely", vec![
-            release("only", "Only Release", Some(5), None),
-        ]);
+        let rec = make_recording(
+            "Lonely",
+            vec![release("only", "Only Release", Some(5), None)],
+        );
         let meta = mb_recording_to_metadata("TestArtist", "Lonely", rec);
         assert_eq!(meta.source.preferred_release_id.as_deref(), Some("only"));
     }
+
+    fn candidate(title: &str) -> TrackMetadata {
+        TrackMetadata {
+            artist: "Denzel Curry".into(),
+            title: title.into(),
+            duration_ms: Some(200_000),
+            album: Some("Test Album".into()),
+            track_number: Some(1),
+            artwork_url: Some("https://example.test/art.jpg".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn original_threatz_rejects_chopped_variants() {
+        let regular = candidate("Threatz");
+        let chopped = candidate("Threatz (Chopped Not Slopped)");
+        assert!(metadata_plausibility_score("Denzel Curry", "Threatz", &regular) >= 35);
+        assert!(metadata_plausibility_score("Denzel Curry", "Threatz", &chopped) < 35);
+
+        let mut chopped_album = candidate("Threatz");
+        chopped_album.album = Some("Threatz (Chopped Not Slopped)".into());
+        assert!(metadata_plausibility_score("Denzel Curry", "Threatz", &chopped_album) < 35);
+    }
+
+    #[test]
+    fn sole_chopped_provider_result_is_not_selected() {
+        let chopped = candidate("Threatz (Chopped Not Slopped)");
+        assert!(
+            choose_plausible_metadata("Denzel Curry", "Threatz", Some(chopped), None).is_none()
+        );
+    }
+
+    #[test]
+    fn dj_mix_release_is_not_used_for_regular_request() {
+        let rec = make_recording(
+            "Wanderlust",
+            vec![
+                release("dj-mix", "NO.SLEEP 05 (DJ mix)", Some(20), Some("Album")),
+                release("single", "Wanderlust", Some(1), Some("Single")),
+            ],
+        );
+        let meta = mb_recording_to_metadata("The Weeknd", "Wanderlust", rec);
+        assert_eq!(meta.album.as_deref(), Some("Wanderlust"));
+    }
+
+    #[test]
+    fn requested_remix_requires_the_same_named_clean_variant() {
+        let matching = candidate("Wanderlust (Snakehips Remix)");
+        let original = candidate("Wanderlust");
+        let different = candidate("Wanderlust (DJ Foo Remix)");
+        let mut slowed = candidate("Wanderlust (Snakehips Remix)");
+        slowed.album = Some("Wanderlust (Snakehips Remix) (Slowed + Reverb)".into());
+        assert!(
+            metadata_plausibility_score("Denzel Curry", "Wanderlust Snakehips remix", &matching)
+                >= 35
+        );
+        assert!(
+            metadata_plausibility_score("Denzel Curry", "Wanderlust Snakehips remix", &original)
+                < 35
+        );
+        assert!(
+            metadata_plausibility_score("Denzel Curry", "Wanderlust Snakehips remix", &different)
+                < 35
+        );
+        assert!(
+            metadata_plausibility_score("Denzel Curry", "Wanderlust Snakehips remix", &slowed) < 35
+        );
+    }
+
+    #[test]
+    fn itunes_artist_credit_preserves_featured_artist() {
+        let (artist, featured) = split_featured_artists("Fabolous feat. Drake");
+        assert_eq!(artist, "Fabolous");
+        assert_eq!(featured, vec!["Drake"]);
+    }
+}
+
+fn is_unwanted_release_title(release_title: &str, requested_title: &str) -> bool {
+    let release = release_title.to_ascii_lowercase();
+    let request = requested_title.to_ascii_lowercase();
+    release.contains("dj mix") && !request.contains("dj mix")
 }
 
 // ─── Apple iTunes Search ─────────────────────────────────────────────────────
@@ -582,9 +812,10 @@ async fn resolve_apple(artist: &str, title: &str) -> Result<Option<TrackMetadata
 }
 
 fn itunes_track_to_metadata(title: &str, track: ItunesTrack) -> TrackMetadata {
+    let (artist, featured_artists) = split_featured_artists(&track.artistName);
     TrackMetadata {
-        artist: track.artistName,
-        featured_artists: vec![],
+        artist,
+        featured_artists,
         title: track.trackName.clone(),
         possible_titles: vec![track.trackName, title.to_string()],
         duration_ms: track.trackTimeMillis,
@@ -608,3 +839,19 @@ fn itunes_track_to_metadata(title: &str, track: ItunesTrack) -> TrackMetadata {
     }
 }
 
+fn split_featured_artists(artist_name: &str) -> (String, Vec<String>) {
+    let lower = artist_name.to_ascii_lowercase();
+    for separator in [" feat. ", " feat ", " ft. ", " ft ", " featuring "] {
+        if let Some(index) = lower.find(separator) {
+            let primary = artist_name[..index].trim().to_string();
+            let featured = artist_name[index + separator.len()..]
+                .split(['&', ',', ';'])
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .collect();
+            return (primary, featured);
+        }
+    }
+    (artist_name.trim().to_string(), Vec::new())
+}

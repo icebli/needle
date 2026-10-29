@@ -1,5 +1,5 @@
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
 /// Output profile for library layout
@@ -44,8 +44,8 @@ pub fn sanitize_path_component(value: &str, fallback: &str) -> String {
     let mut pending_space = false;
 
     for ch in value.chars() {
-        let unsafe_char = ch.is_control()
-            || matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|');
+        let unsafe_char =
+            ch.is_control() || matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|');
         if unsafe_char || ch.is_whitespace() {
             if !out.is_empty() {
                 pending_space = true;
@@ -125,7 +125,9 @@ pub fn build_output_path(
     let album_str = sanitize_path_component(album.unwrap_or("Unknown Album"), "Unknown Album");
     let title_str = sanitize_path_component(title, "Unknown Title");
     let ext_str = sanitize_path_component(ext, "audio");
-    let track_str = track.map(|t| format!("{:02}", t)).unwrap_or_else(|| "00".into());
+    let track_str = track
+        .map(|t| format!("{:02}", t))
+        .unwrap_or_else(|| "00".into());
 
     let relative = profile
         .template
@@ -142,7 +144,9 @@ pub fn build_output_path(
         match component {
             std::path::Component::Normal(part) => path.push(part),
             std::path::Component::CurDir => {}
-            std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
                 path.push("Unknown");
             }
         }
@@ -155,18 +159,12 @@ pub fn build_output_path(
 /// `Skip` returns `None` when the destination already exists. `KeepBoth`
 /// chooses the next unused numbered sibling. `Ask` reports that an interactive
 /// decision is required instead of silently replacing the file.
-pub fn resolve_destination(
-    path: &Path,
-    strategy: CollisionStrategy,
-) -> Result<Option<PathBuf>> {
+pub fn resolve_destination(path: &Path, strategy: CollisionStrategy) -> Result<Option<PathBuf>> {
     handle_collision(path, strategy)
 }
 
 /// Handle file collision based on strategy
-pub fn handle_collision(
-    path: &Path,
-    strategy: CollisionStrategy,
-) -> Result<Option<PathBuf>> {
+pub fn handle_collision(path: &Path, strategy: CollisionStrategy) -> Result<Option<PathBuf>> {
     if !path.exists() {
         return Ok(Some(path.to_path_buf()));
     }
@@ -180,7 +178,12 @@ pub fn handle_collision(
             let ext = path.extension().unwrap_or_default();
             let parent = path.parent().unwrap_or(Path::new("."));
             loop {
-                let new_name = format!("{} ({}).{}", stem.to_string_lossy(), counter, ext.to_string_lossy());
+                let new_name = format!(
+                    "{} ({}).{}",
+                    stem.to_string_lossy(),
+                    counter,
+                    ext.to_string_lossy()
+                );
                 let new_path = parent.join(new_name);
                 if !new_path.exists() {
                     return Ok(Some(new_path));
@@ -190,7 +193,10 @@ pub fn handle_collision(
         }
         CollisionStrategy::Ask => {
             // CLI handles interactive prompt
-            bail!("file collision at {}: interactive resolution required", path.display())
+            bail!(
+                "file collision at {}: interactive resolution required",
+                path.display()
+            )
         }
     }
 }
@@ -235,36 +241,39 @@ mod tests {
         );
 
         assert!(path.starts_with("/library"));
-        assert_eq!(path.components().next(), Some(std::path::Component::RootDir));
+        assert_eq!(
+            path.components().next(),
+            Some(std::path::Component::RootDir)
+        );
         let parts: Vec<_> = path.components().skip(1).collect();
-        assert!(parts.iter().all(|component| matches!(component, std::path::Component::Normal(_))));
-        assert_eq!(parts[0], std::path::Component::Normal(std::ffi::OsStr::new("library")));
-        assert!(parts.iter().all(|component| {
-            component.as_os_str() != ".." && component.as_os_str() != "."
-        }));
+        assert!(parts
+            .iter()
+            .all(|component| matches!(component, std::path::Component::Normal(_))));
+        assert_eq!(
+            parts[0],
+            std::path::Component::Normal(std::ffi::OsStr::new("library"))
+        );
+        assert!(parts
+            .iter()
+            .all(|component| { component.as_os_str() != ".." && component.as_os_str() != "." }));
         let rendered = path.to_string_lossy().into_owned();
         assert!(
             rendered.starts_with("/library/"),
             "escaped library root: {rendered}"
         );
-        assert!(!rendered.contains(".."), "parent segment remained: {rendered}");
+        assert!(
+            !rendered.contains(".."),
+            "parent segment remained: {rendered}"
+        );
         assert_eq!(
-            rendered,
-            "/library/etc/albums tmp/01 - song secret.mp3",
+            rendered, "/library/etc/albums tmp/01 - song secret.mp3",
             "unexpected sanitized path: {rendered}"
         );
     }
 
     #[test]
     fn empty_and_dot_components_use_fallbacks() {
-        let path = build_output_path(
-            &profile("/library"),
-            " .. ",
-            "...",
-            Some("   "),
-            None,
-            "",
-        );
+        let path = build_output_path(&profile("/library"), " .. ", "...", Some("   "), None, "");
 
         assert_eq!(
             path,
@@ -274,7 +283,8 @@ mod tests {
 
     #[test]
     fn skip_keeps_existing_file() {
-        let dir = std::env::temp_dir().join(format!("needle-collision-skip-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("needle-collision-skip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("track.mp3");
@@ -289,14 +299,17 @@ mod tests {
 
     #[test]
     fn keep_both_uses_next_free_sibling() {
-        let dir = std::env::temp_dir().join(format!("needle-collision-keep-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("needle-collision-keep-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("track.mp3");
         std::fs::write(&path, b"existing").unwrap();
         std::fs::write(dir.join("track (1).mp3"), b"also").unwrap();
 
-        let resolved = resolve_destination(&path, CollisionStrategy::KeepBoth).unwrap().unwrap();
+        let resolved = resolve_destination(&path, CollisionStrategy::KeepBoth)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(resolved, dir.join("track (2).mp3"));
         let _ = std::fs::remove_dir_all(dir);

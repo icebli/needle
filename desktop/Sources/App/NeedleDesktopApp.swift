@@ -38,6 +38,7 @@ final class NeedleAppDelegate: NSObject, NSApplicationDelegate {
 struct AppCommands: Commands {
     let model: AppModel
     let updates: UpdateService
+    @FocusedValue(\.bookmarkSearch) private var focusBookmarkSearch
     var body: some Commands {
         CommandGroup(after: .appInfo) {
             Button("Check for Updates…") { updates.checkForUpdates() }
@@ -47,5 +48,27 @@ struct AppCommands: Commands {
             Button("Add Music") { model.destination = .addMusic }
                 .keyboardShortcut("n", modifiers: [.command])
         }
+        CommandGroup(after: .textEditing) {
+            Button("Find in Bookmarks") { focusBookmarkSearch?() }
+                .keyboardShortcut("f", modifiers: [.command])
+                .disabled(focusBookmarkSearch == nil)
+        }
+        CommandMenu("Go") {
+            ForEach(Array(Destination.allCases.enumerated()), id: \.element) { index, destination in
+                Button(destination.rawValue) { model.destination = destination }
+                    .keyboardShortcut(KeyEquivalent(Character(String(index + 1))), modifiers: [.command])
+            }
+        }
+    }
+}
+
+private struct BookmarkSearchKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+extension FocusedValues {
+    var bookmarkSearch: (() -> Void)? {
+        get { self[BookmarkSearchKey.self] }
+        set { self[BookmarkSearchKey.self] = newValue }
     }
 }

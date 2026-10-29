@@ -28,14 +28,48 @@ struct ActivityView: View {
     }
 }
 
+private struct ActivityArtwork: View {
+    let track: TrackRequest
+    let model: AppModel
+    let fallbackSymbol: String
+    @State private var artworkPath: String?
+
+    var body: some View {
+        Group {
+            if let artworkPath, let image = NSImage(contentsOfFile: artworkPath) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: fallbackSymbol)
+                    .font(.title2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .frame(width: 34, height: 34)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .accessibilityLabel(artworkPath == nil ? "No embedded artwork" : "Embedded artwork for \(track.title)")
+        .task(id: track.savedPath) {
+            artworkPath = nil
+            guard track.savedPath != nil else { return }
+            let result = await LibraryRepairService().inspect(track, settings: model.settings.value)
+            guard !Task.isCancelled else { return }
+            if case .success(let inspection) = result {
+                artworkPath = inspection.artwork.first?.extractedPath
+            }
+        }
+    }
+}
+
 struct TrackRow: View {
     let track: TrackRequest
     let model: AppModel
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 14) {
-                Image(systemName: track.savedPath == nil ? "waveform" : "music.note")
-                    .font(.title2).foregroundStyle(.orange).frame(width: 34)
+                ActivityArtwork(track: track, model: model,
+                               fallbackSymbol: track.savedPath == nil ? "waveform" : "music.note")
                 VStack(alignment: .leading, spacing: 5) {
                     Text(track.title).font(.headline)
                     Text(track.artist + (track.album.isEmpty ? "" : " · \(track.album)")).foregroundStyle(.secondary)

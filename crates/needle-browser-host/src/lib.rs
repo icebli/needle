@@ -181,7 +181,11 @@ pub fn run_native_host() -> Result<()> {
     write_native_message(io::stdout().lock(), &response)
 }
 
-pub fn run_desktop_command<R: Read, W: Write>(command: &str, mut reader: R, mut writer: W) -> Result<()> {
+pub fn run_desktop_command<R: Read, W: Write>(
+    command: &str,
+    mut reader: R,
+    mut writer: W,
+) -> Result<()> {
     let mut body = String::new();
     reader
         .by_ref()
@@ -203,10 +207,14 @@ pub fn run_desktop_command<R: Read, W: Write>(command: &str, mut reader: R, mut 
 }
 
 fn enqueue_desktop_job(body: &str) -> Result<DesktopEnqueueResponse> {
-    let request: DesktopEnqueueRequest = serde_json::from_str(body).context("invalid enqueue JSON")?;
+    let request: DesktopEnqueueRequest =
+        serde_json::from_str(body).context("invalid enqueue JSON")?;
     let artist = validate_text("artist", request.artist)?;
     let title = validate_text("title", request.title)?;
-    let album = request.album.map(|value| validate_text("album", value)).transpose()?;
+    let album = request
+        .album
+        .map(|value| validate_text("album", value))
+        .transpose()?;
     let playlist_name = validate_text("playlist name", request.playlist_name)?;
     let duration_ms = request.saved_path.as_deref().and_then(probe_duration_ms);
     let job = QueueJob {
@@ -650,7 +658,9 @@ fn save_receipt(receipts: &Path, receipt: &AcknowledgementReceipt) -> Result<()>
 fn load_receipt(receipts: &Path, job_id: &str) -> Result<Option<AcknowledgementReceipt>> {
     let path = receipt_path(receipts, job_id)?;
     match fs::read(path) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).context("invalid playlist acknowledgement receipt")?)),
+        Ok(bytes) => Ok(Some(
+            serde_json::from_slice(&bytes).context("invalid playlist acknowledgement receipt")?,
+        )),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
@@ -680,7 +690,9 @@ fn save_progress(progress: &Path, receipt: &ProgressReceipt) -> Result<()> {
 fn load_progress(progress: &Path, job_id: &str) -> Result<Option<ProgressReceipt>> {
     let path = progress_path(progress, job_id)?;
     match fs::read(path) {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).context("invalid playlist progress receipt")?)),
+        Ok(bytes) => Ok(Some(
+            serde_json::from_slice(&bytes).context("invalid playlist progress receipt")?,
+        )),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
@@ -688,7 +700,10 @@ fn load_progress(progress: &Path, job_id: &str) -> Result<Option<ProgressReceipt
 
 fn record_progress(queue: &Path, progress: &Path, receipt: ProgressReceipt) -> Result<bool> {
     with_queue_lock(queue, || {
-        if !load_queue(queue)?.iter().any(|job| job.id == receipt.job_id) {
+        if !load_queue(queue)?
+            .iter()
+            .any(|job| job.id == receipt.job_id)
+        {
             return Ok(false);
         }
         save_progress(progress, &receipt)?;
@@ -713,14 +728,18 @@ fn queue_tracks_match(left: &QueueTrack, right: &QueueTrack) -> bool {
         (None, None) => match (left.duration_ms, right.duration_ms) {
             (Some(left_duration), Some(right_duration)) => {
                 left_duration == right_duration
-                    && left.album.as_deref().unwrap_or("").eq_ignore_ascii_case(
-                        right.album.as_deref().unwrap_or(""),
-                    )
+                    && left
+                        .album
+                        .as_deref()
+                        .unwrap_or("")
+                        .eq_ignore_ascii_case(right.album.as_deref().unwrap_or(""))
             }
             (Some(_), None) | (None, Some(_)) => false,
-            (None, None) => left.album.as_deref().unwrap_or("").eq_ignore_ascii_case(
-                right.album.as_deref().unwrap_or(""),
-            ),
+            (None, None) => left
+                .album
+                .as_deref()
+                .unwrap_or("")
+                .eq_ignore_ascii_case(right.album.as_deref().unwrap_or("")),
         },
     }
 }
@@ -734,7 +753,9 @@ fn enqueue_job(job: QueueJob) -> Result<String> {
                 .playlist_name
                 .eq_ignore_ascii_case(&job.playlist_name)
                 && existing.tracks.iter().any(|existing_track| {
-                    job.tracks.iter().any(|track| queue_tracks_match(existing_track, track))
+                    job.tracks
+                        .iter()
+                        .any(|track| queue_tracks_match(existing_track, track))
                 })
         }) {
             return Ok(existing.id.clone());
@@ -896,11 +917,17 @@ fn handle_http_request(mut request: Request) -> Result<()> {
             let receipt = AcknowledgementReceipt {
                 job_id: id.clone(),
                 playlist_uri: valid_spotify_uri(
-                    value.get("playlistUri").and_then(|value| value.as_str()).map(str::to_owned),
+                    value
+                        .get("playlistUri")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned),
                     "spotify:playlist:",
                 ),
                 added_uri: valid_spotify_uri(
-                    value.get("addedUri").and_then(|value| value.as_str()).map(str::to_owned),
+                    value
+                        .get("addedUri")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned),
                     "spotify:local:",
                 ),
                 acknowledged_at_unix: unix_timestamp(),
@@ -1117,7 +1144,10 @@ mod tests {
             duration_ms: Some(190_055),
             ..base.clone()
         };
-        assert!(!queue_tracks_match(&same_duration_different_album, &downloaded));
+        assert!(!queue_tracks_match(
+            &same_duration_different_album,
+            &downloaded
+        ));
 
         let path_old = QueueTrack {
             saved_path: Some("/Music/old.mp3".into()),
@@ -1216,7 +1246,12 @@ mod tests {
             }],
         )
         .unwrap();
-        assert_eq!(status_for_job(&queue, &receipts, "job-pending").unwrap().status, "pending");
+        assert_eq!(
+            status_for_job(&queue, &receipts, "job-pending")
+                .unwrap()
+                .status,
+            "pending"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1244,9 +1279,13 @@ mod tests {
             },
         )
         .unwrap());
-        let status = status_for_job_with_progress(&queue, &receipts, &progress, "job-detail").unwrap();
+        let status =
+            status_for_job_with_progress(&queue, &receipts, &progress, "job-detail").unwrap();
         assert_eq!(status.status, "pending");
-        assert_eq!(status.detail.as_deref(), Some("Open Spotify Local Files and choose the recording"));
+        assert_eq!(
+            status.detail.as_deref(),
+            Some("Open Spotify Local Files and choose the recording")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1300,8 +1339,18 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(status_for_job(&queue, &receipts, "job-unknown").unwrap().status, "unknown");
-        assert_eq!(status_for_job(&queue, &receipts, "job-missing").unwrap().status, "unknown");
+        assert_eq!(
+            status_for_job(&queue, &receipts, "job-unknown")
+                .unwrap()
+                .status,
+            "unknown"
+        );
+        assert_eq!(
+            status_for_job(&queue, &receipts, "job-missing")
+                .unwrap()
+                .status,
+            "unknown"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1322,7 +1371,13 @@ mod tests {
             ..first
         };
         save_receipt(&receipts, &second).unwrap();
-        assert_eq!(status_for_job(&queue, &receipts, "job-retry").unwrap().added_uri.as_deref(), Some("spotify:local:new"));
+        assert_eq!(
+            status_for_job(&queue, &receipts, "job-retry")
+                .unwrap()
+                .added_uri
+                .as_deref(),
+            Some("spotify:local:new")
+        );
         assert!(validate_job_id("../escape").is_err());
         assert!(validate_job_id("job-retry").is_ok());
         fs::remove_dir_all(root).unwrap();

@@ -45,6 +45,7 @@ struct TabGuideView: View {
         case .addMusic: "Find the right recording, listen before saving, then choose what to keep."
         case .reviewQueue: "Review a whole list at your pace while approved downloads run in the background."
         case .discover: "Find popular source recordings for your top Spotify artists, then preview and approve."
+        case .bookmarks: "Keep promising recordings here until you are ready to review and save them."
         case .activity: "See what Needle saved locally and what Spotify has confirmed."
         case .library: "Inspect and repair recording details and artwork without downloading again."
         }
@@ -55,6 +56,7 @@ struct TabGuideView: View {
         case .addMusic: addMusicSections
         case .reviewQueue: reviewQueueSections
         case .discover: discoverySections
+        case .bookmarks: [GuideSection("Save for later", "Bookmark any source from Discover or a song search. Your bookmarks keep the exact source link and stay available after restarting Needle."), GuideSection("Review when ready", "Open a source from the bookmark list to review it in the Add Music flow, or remove bookmarks you no longer want.")]
         case .activity: activitySections
         case .library: librarySections
         }

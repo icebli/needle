@@ -20,6 +20,13 @@ enum SourceURLDropImporter {
         for (index, provider) in providers.prefix(maximumProviders).enumerated() {
             if provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
                 group.enter()
+                let loadFallback: @MainActor @Sendable () -> Void = {
+                    if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
+                        Self.loadText(provider, at: index, collector: collector, group: group)
+                    } else {
+                        group.leave()
+                    }
+                }
                 provider.loadObject(ofClass: NSURL.self) { object, _ in
                     if let url = object as? NSURL, let value = url.absoluteString {
                         if value.utf8.count <= maximumPayloadBytes {
@@ -28,10 +35,8 @@ enum SourceURLDropImporter {
                             collector.markOversized()
                         }
                         group.leave()
-                    } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
-                        Self.loadText(provider, at: index, collector: collector, group: group)
                     } else {
-                        group.leave()
+                        Task { await loadFallback() }
                     }
                 }
             } else if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {

@@ -123,13 +123,39 @@ actor NeedleCLIService {
         } catch { return .failure(error) }
     }
 
-    func get(track: TrackRequest, settings: NeedleSettings,
+    func prepareMetadata(artist: String, title: String, candidate: Candidate, settings: NeedleSettings) async -> Result<MetadataDraft, Error> {
+        var args = ["prepare", artist, title, "--source-title", candidate.title, "--url", candidate.url]
+        if !settings.albumHint.isEmpty { args += ["--album", settings.albumHint] }
+        if settings.noMetadata { args += ["--no-metadata"] }
+        do {
+            let result = try await execute(args, settings: settings)
+            guard let draft = String(decoding: result.output, as: UTF8.self).split(whereSeparator: \.isNewline).reversed().compactMap({ try? JSONDecoder().decode(MetadataDraft.self, from: Data($0.utf8)) }).first else {
+                throw CLIError.message("Needle returned no metadata to review.")
+            }
+            guard draft.sourceURL == candidate.url else {
+                throw CLIError.message("Metadata does not belong to the selected recording.")
+            }
+            return .success(draft)
+        } catch { return .failure(error) }
+    }
+
+    func get(track: TrackRequest, settings: NeedleSettings, approved: MetadataDraft? = nil,
              onProgress: @escaping @Sendable (String) -> Void = { _ in }) async -> Result<TrackRequest, Error> {
         var args = ["get", track.artist, track.title, "--url", track.sourceURL,
                     "--yes", "--strict", "--json", "--events", "--format", settings.format]
         if !track.album.isEmpty { args += ["--album", track.album] }
         appendMetadataOptions(settings, to: &args)
         do {
+            if let approved {
+                guard approved.sourceURL == track.sourceURL else {
+                    throw CLIError.message("The approved metadata belongs to a different recording.")
+                }
+                let data = try JSONEncoder().encode(approved)
+                guard let json = String(data: data, encoding: .utf8) else {
+                    throw CLIError.message("Could not encode approved metadata.")
+                }
+                args += ["--approved-tags", json]
+            }
             let result = try await execute(args, settings: settings, onProgress: onProgress)
             struct Saved: Decodable {
                 let ok: Bool

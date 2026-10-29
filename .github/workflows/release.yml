@@ -39,8 +39,8 @@ jobs:
         run: |
           mkdir -p target/release-tools
           cd target/release-tools
-          curl --fail --location --retry 3 -o yt-dlp_macos https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos
-          curl --fail --location --retry 3 -o SHA2-256SUMS https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/SHA2-256SUMS
+          curl --fail --location --retry 3 -o yt-dlp_macos https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.26/yt-dlp_macos
+          curl --fail --location --retry 3 -o SHA2-256SUMS https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.26/SHA2-256SUMS
           awk '$2 == "yt-dlp_macos" {print}' SHA2-256SUMS > selected.sha256
           test -s selected.sha256
           shasum -a 256 -c selected.sha256

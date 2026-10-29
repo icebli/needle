@@ -60,11 +60,32 @@ struct DiscoveryView: View {
                     .disabled(busy).popover(isPresented: $showArtists) { artistChooser }
                     .accessibilityLabel("Choose artists, \(selectedArtists.count) selected")
                     Spacer(minLength: 8)
+                    Button("Refresh all", systemImage: "arrow.clockwise") { store.refreshCatalog() }
+                        .disabled(store.recordings.isEmpty || busy)
+                        .help("Recheck Spotify availability for all saved recordings.")
                     Button("Find recordings", systemImage: "magnifyingglass") {
                         store.find(settings: model.settings.value, library: model.history.tracks)
                     }.buttonStyle(.borderedProminent).tint(.orange)
                         .disabled(selectedArtists.isEmpty || busy)
                 }
+                HStack(spacing: 14) {
+                    Image(systemName: "sparkles.rectangle.stack")
+                        .font(.title2)
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Your listening room")
+                            .font(.headline)
+                        Text("Compare the source, listen briefly, then choose what belongs in your library.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text("\(visible.count) to review")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 if store.isSearching || store.isSyncing {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
@@ -170,25 +191,40 @@ private struct DiscoveryRecordingRow: View {
     @State private var showDetails = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: 18) {
             AsyncImage(url: recording.candidate.thumbnailURL.flatMap { AppModel.mediaURL($0) }) { image in
                 image.resizable().scaledToFill()
             } placeholder: {
-                Image(systemName: "music.note").font(.title2).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity).background(.quaternary)
+                ZStack {
+                    LinearGradient(colors: [.orange.opacity(0.8), .brown.opacity(0.72), .indigo.opacity(0.8)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    Image(systemName: "music.note").font(.title).foregroundStyle(.white.opacity(0.9))
+                }
             }
-            .frame(width: 64, height: 64).clipShape(RoundedRectangle(cornerRadius: 8))
+            .frame(width: 104, height: 104).clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .accessibilityLabel("Source artwork for \(recording.title)")
             VStack(alignment: .leading, spacing: 7) {
-                Text(recording.title).font(.headline).lineLimit(2).textSelection(.enabled)
+                Text(recording.title)
+                    .font(.system(.title3, design: .serif).weight(.semibold))
+                    .lineLimit(2)
+                    .textSelection(.enabled)
                 Text("\(recording.artist.name) · \(recording.candidate.provider.capitalized) · \(recording.candidate.uploader ?? "Unknown uploader")\(duration)")
                     .font(.callout).foregroundStyle(.secondary)
                 CandidateMetadataView(candidate: recording.candidate)
-                Label(recording.availability.label, systemImage: recording.availability == .found ? "checkmark.circle" : recording.availability == .unknown ? "exclamationmark.circle" : "magnifyingglass")
-                    .font(.caption).foregroundStyle(recording.availability == .unknown ? .orange : .secondary)
+                HStack(spacing: 8) {
+                    Label(recording.availability.label, systemImage: recording.availability == .found ? "checkmark.circle" : recording.availability == .unknown ? "exclamationmark.circle" : "magnifyingglass")
+                    Text("Source evidence")
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(recording.availability == .unknown ? .orange : .secondary)
                 if recording.availability == .unknown {
                     Text("The check failed; this does not mean the song is absent.").font(.caption).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 12) {
+                    Button {
+                        model.bookmarks.toggle(artist: recording.artist.name, title: recording.title, candidate: recording.candidate)
+                    } label: {
+                        Label(model.bookmarks.contains(candidate: recording.candidate) ? "Bookmarked" : "Bookmark", systemImage: model.bookmarks.contains(candidate: recording.candidate) ? "bookmark.fill" : "bookmark")
+                    }.buttonStyle(.borderless)
                     if recording.availability == .unknown {
                         Button("Retry check") { model.discovery.retryCatalog(recording) }
                             .disabled(model.discovery.isSearching || model.discovery.isSyncing)
@@ -219,7 +255,10 @@ private struct DiscoveryRecordingRow: View {
                     }.font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
-        }.padding(.vertical, 18)
+        }
+        .padding(16)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.vertical, 8)
     }
 
     private var duration: String {

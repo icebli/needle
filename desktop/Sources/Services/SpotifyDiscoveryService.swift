@@ -96,6 +96,20 @@ enum DiscoveryMatching {
 
     static func title(_ raw: String, artist: String) -> String {
         var result = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // This program names the performer and session in prose on YouTube,
+        // but uses a title/session suffix in Spotify. Retain the session identity.
+        let coverPattern = "(?i)^" + NSRegularExpression.escapedPattern(for: artist)
+            + " covers .+ ['‘\"](.+?)['’\"] for Like A Version$"
+        if let expression = try? NSRegularExpression(pattern: coverPattern),
+           let match = expression.firstMatch(in: result, range: NSRange(result.startIndex..., in: result)),
+           let song = Range(match.range(at: 1), in: result) {
+            result = String(result[song]) + " - triple j Like A Version"
+        }
+        // Remove only complete, known upload labels. A label containing a live,
+        // remix, or other version qualifier must remain part of the identity.
+        let labels = "(?:official )?(?:audio visualizer|visualizer|music video|lyric video|audio|video|lyrics)"
+        result = result.replacingOccurrences(of: "(?i)\\(" + labels + "\\)|\\[" + labels + "\\]",
+                                             with: "", options: .regularExpression)
         for separator in [" - ", " — ", " – "] {
             if let range = result.range(of: separator) {
                 let prefix = String(result[..<range.lowerBound])
@@ -124,7 +138,9 @@ enum DiscoveryMatching {
             guard track.artists.contains(where: { $0.id == artist.id || normalized($0.name) == normalized(artist.name) }) else { return false }
             // A favorite artist may be a guest: use the returned credits to
             // recognize "Main Artist - Song feat. Favorite Artist" uploads.
-            return ([artist.name] + track.artists.map(\.name)).contains { credit in
+            // Spotify still credits FERG under his previous artist name.
+            let aliases = track.artists.filter { $0.id == "5dHt1vcEm9qb8fCyLcB3HL" }.map { _ in "FERG" }
+            return ([artist.name] + track.artists.map(\.name) + aliases).contains { credit in
                 comparableTitle(track.name, artist: credit) == comparableTitle(title, artist: credit)
             }
         }
@@ -132,19 +148,38 @@ enum DiscoveryMatching {
 
     private static func comparableTitle(_ raw: String, artist: String) -> String {
         var cleaned = title(raw, artist: artist)
-        // Remove a featured-artist decoration, but retain a meaningful
+        let versionWords = ["remix", "live", "acoustic", "instrumental", "edit", "version", "remaster", "extended", "sped", "slowed"]
+        // Remove a featured/with-artist decoration, but retain a meaningful
         // parenthesized version that follows it ("feat. X (Live)").
-        for marker in [" ft. ", " ft ", " feat. ", " feat ", " featuring ", "(ft. ", "(feat. ", "(featuring ", "[ft. ", "[feat. ", "[featuring "] {
+        for marker in [" ft. ", " ft ", " feat. ", " feat ", " featuring ", "(ft. ", "(feat. ", "(featuring ", "[ft. ", "[feat. ", "[featuring ", "(with ", "[with "] {
             if let range = cleaned.range(of: marker, options: .caseInsensitive) {
                 let prefix = String(cleaned[..<range.lowerBound])
                 let suffix = String(cleaned[range.upperBound...])
-                if let versionStart = suffix.firstIndex(where: { $0 == "(" || $0 == "[" }) {
+                if marker.hasPrefix("(") || marker.hasPrefix("[") {
+                    let closing: Character = marker.hasPrefix("(") ? ")" : "]"
+                    if let end = suffix.firstIndex(of: closing) {
+                        let credit = String(suffix[..<end])
+                        let tail = String(suffix[suffix.index(after: end)...])
+                        if normalized(credit).split(separator: " ").contains(where: { versionWords.contains(String($0)) }) {
+                            // A version can be inside the credit's brackets.
+                            // Keep ambiguous/nested content rather than matching studio audio.
+                            if let separator = credit.range(of: "\\s[-–—]\\s", options: .regularExpression) {
+                                cleaned = prefix + " " + credit[separator.upperBound...] + " " + tail
+                            }
+                        } else {
+                            cleaned = prefix + " " + tail
+                        }
+                    }
+                } else if let versionStart = suffix.firstIndex(where: { $0 == "(" || $0 == "[" }) {
                     cleaned = prefix + String(suffix[versionStart...])
                 } else {
-                    let versionWords = ["remix", "live", "acoustic", "instrumental", "edit", "version", "remaster", "extended", "sped", "slowed"]
                     let words = normalized(suffix).split(separator: " ")
                     if let versionIndex = words.firstIndex(where: { versionWords.contains(String($0)) }) {
-                        cleaned = prefix + " " + words[versionIndex...].joined(separator: " ")
+                        // Keep the remixer's name before "Remix", when separated
+                        // from the artist credit ("feat. X - DJ Y Remix").
+                        let versionTail = suffix.range(of: "\\s[-–—]\\s", options: .regularExpression)
+                        cleaned = prefix + " " + (versionTail.map { String(suffix[$0.upperBound...]) }
+                            ?? words[versionIndex...].joined(separator: " "))
                     } else {
                         cleaned = prefix
                     }

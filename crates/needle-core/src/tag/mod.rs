@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
@@ -294,7 +294,8 @@ pub fn write_tags(file: &Path, plan: &TagPlan) -> Result<()> {
 }
 
 fn guess_mime_type(path: &Path) -> lofty::picture::MimeType {
-    let ext = path.extension()
+    let ext = path
+        .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
