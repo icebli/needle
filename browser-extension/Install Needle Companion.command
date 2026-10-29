@@ -3,15 +3,25 @@ set -eu
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOST_APP=""
-for candidate in "/Applications/Needle.app" "$HOME/Applications/Needle.app"; do
-  if [[ -x "$candidate/Contents/Resources/bin/needle-browser-host" ]]; then
+REQUESTED_APP="${NEEDLE_APP_PATH:-}"
+if [[ -n "$REQUESTED_APP" ]]; then
+  CANDIDATES=("$REQUESTED_APP")
+else
+  CANDIDATES=("/Applications/Needle.app" "$HOME/Applications/Needle.app")
+fi
+for candidate in "${CANDIDATES[@]}"; do
+  if [[ -x "$candidate/Contents/Resources/bin/needle-browser-host" && -x "$candidate/Contents/Resources/bin/node" ]]; then
     HOST_APP="$candidate"
     break
   fi
 done
 
 if [[ -z "$HOST_APP" ]]; then
-  echo "Needle.app was not found in /Applications or ~/Applications. Install Needle first, then run this installer again."
+  if [[ -n "$REQUESTED_APP" ]]; then
+    echo "Needle.app at $REQUESTED_APP is missing the browser host or bundled node runtime. Install a complete Needle.app or unset NEEDLE_APP_PATH."
+  else
+    echo "Needle.app with a browser host and bundled node runtime was not found in /Applications or ~/Applications. Install Needle first, then run this installer again."
+  fi
   read -r -p "Press Return to close…" _ || true
   exit 1
 fi
@@ -49,9 +59,18 @@ if [[ "${1:-}" == "--setup-spicetify" || "${1:-}" == "--setup-spotify" ]]; then
     SPICETIFY_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/spicetify/Extensions"
     mkdir -p "$SPICETIFY_DIR"
     install -m 0644 "$ROOT_DIR/spicetify/needle-local-playlist.js" "$SPICETIFY_DIR/needle-local-playlist.js"
-    "$SPICETIFY_BIN" config extensions needle-local-playlist.js
+    install -m 0644 "$ROOT_DIR/spicetify/needle-discovery.js" "$SPICETIFY_DIR/needle-discovery.js"
+    CURRENT_EXTENSIONS="$($SPICETIFY_BIN config extensions 2>/dev/null | tr '\n' '|')"
+    CURRENT_EXTENSIONS="${CURRENT_EXTENSIONS%|}"
+    for extension in needle-local-playlist.js needle-discovery.js; do
+      case "|$CURRENT_EXTENSIONS|" in
+        *"|$extension|"*) ;;
+        *) CURRENT_EXTENSIONS="${CURRENT_EXTENSIONS:+$CURRENT_EXTENSIONS|}$extension" ;;
+      esac
+    done
+    "$SPICETIFY_BIN" config extensions "$CURRENT_EXTENSIONS"
     "$SPICETIFY_BIN" apply
-    echo "Spicetify playlist sync installed. Restart Spotify if it was open."
+    echo "Spicetify playlist sync and discovery installed. Restart Spotify if it was open."
   fi
 else
   echo "Spotify was not changed. To enable playlist sync later, rerun this installer with --setup-spicetify."

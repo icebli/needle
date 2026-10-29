@@ -11,7 +11,11 @@ final class AppModel {
     var metadata: Metadata?
     var requestSnapshot: RequestSnapshot?
     var isSearching = false
-    var isSaving = false
+    var isSaving: Bool { !saveServices.isEmpty }
+    private var saveServices: [UUID: NeedleCLIService] = [:]
+    var reviewQueue: ReviewQueue
+    var discovery: DiscoveryStore
+    var bookmarks: BookmarkStore
     var isCancelling = false
     var isCheckingTools = false
     var tools: DoctorResponse?
@@ -19,13 +23,23 @@ final class AppModel {
     var message: String?
     var selectedCandidateID: String?
     var pollingJobIDs: Set<UUID> = []
+    var isScanningLibrary = false
+    var libraryScanError: String?
+    var libraryScanWarnings: [String] = []
+    var libraryImportedCount = 0
     let cli = NeedleCLIService()
+    let libraryScan = LibraryScanService()
     let spotify = SpotifyHostService()
     var isBusy: Bool { isSearching || isSaving }
 
     init(defaults: UserDefaults = .standard) {
         settings = SettingsStore(defaults: defaults)
-        history = HistoryStore(defaults: defaults)
+        let savedHistory = HistoryStore(defaults: defaults)
+        history = savedHistory
+        reviewQueue = ReviewQueue(defaults: defaults, history: savedHistory)
+        discovery = DiscoveryStore(defaults: defaults)
+        bookmarks = BookmarkStore(defaults: defaults)
+        reviewQueue.onSaved = { [weak self] track, spotify in if spotify { self?.enqueue(track) } }
         recoverSpotifyJobs()
     }
 
@@ -72,21 +86,45 @@ final class AppModel {
     }
 
     func clearSearch() {
-        guard !isBusy else { return }
+        guard !isSearching else { return }
         searchResults = []
         metadata = nil
         requestSnapshot = nil
         selectedCandidateID = nil
     }
 
+    func scanLibrary() {
+        guard !isScanningLibrary else { return }
+        isScanningLibrary = true
+        libraryScanError = nil
+        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Music/needle", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let snapshot = settings.value
+        Task {
+            let result = await libraryScan.scan(root: root, settings: snapshot, history: history)
+            isScanningLibrary = false
+            switch result {
+            case .success(let summary):
+                libraryImportedCount = summary.imported
+                libraryScanWarnings = summary.warnings
+            case .failure(let error):
+                libraryScanError = error.localizedDescription
+                libraryScanWarnings = []
+            }
+        }
+    }
+
     func cancelCurrentOperation() {
         guard isBusy, !isCancelling else { return }
         isCancelling = true
-        Task { await cli.cancel() }
+        Task {
+            if isSearching { await cli.cancel() }
+            else if let service = saveServices.values.first { await service.cancel() }
+        }
     }
 
     func search(artist: String, title: String, album: String = "", sourceURL: String?) {
-        guard !isBusy, !isCheckingTools else { return }
+        guard !isSearching, !isCheckingTools else { return }
         let artist = artist.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = (sourceURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -121,33 +159,50 @@ final class AppModel {
         }
     }
 
-    func save(candidate: CandidateResult, queueSpotify: Bool) {
-        guard !isBusy, !isCheckingTools else { return }
+    func prepareMetadata(candidate: CandidateResult, queueSpotify: Bool) async -> MetadataDraft? {
+        guard let snapshot = requestSnapshot, !isSearching, !isCheckingTools,
+              candidate.score.status != "rejected",
+              searchResults.contains(where: { $0.id == candidate.id && $0.candidate.url == candidate.candidate.url }) else { return nil }
+        let service = NeedleCLIService()
+        let result = await service.prepareMetadata(artist: snapshot.artist, title: snapshot.title, candidate: candidate.candidate, settings: snapshot.settings)
+        guard !Task.isCancelled, requestSnapshot == snapshot else { return nil }
+        switch result {
+        case .success(let draft): return draft
+        case .failure(let error): message = error.localizedDescription; return nil
+        }
+    }
+
+    func save(candidate: CandidateResult, queueSpotify: Bool, approved: MetadataDraft? = nil) {
+        guard !isSearching, !isCheckingTools else { return }
         guard candidate.score.status != "rejected", let snapshot = requestSnapshot,
               searchResults.contains(where: { $0.id == candidate.id && $0.candidate.url == candidate.candidate.url }),
-              Self.mediaURL(candidate.candidate.url) != nil else {
+              Self.mediaURL(candidate.candidate.url) != nil,
+              approved?.sourceURL == candidate.candidate.url,
+              selectedCandidateID != candidate.id else {
             message = "Choose an eligible recording from the current search."
             return
         }
-        let album = snapshot.album.isEmpty ? (metadata?.album ?? "") : snapshot.album
+        let album = snapshot.album
         let track = TrackRequest(artist: snapshot.artist, title: snapshot.title, album: album,
                                  sourceURL: candidate.candidate.url, stage: .metadata,
                                  settingsSnapshot: snapshot.settings)
         history.upsert(track)
-        isSaving = true
+        let downloadService = NeedleCLIService()
+        saveServices[track.id] = downloadService
+        selectedCandidateID = candidate.id
         destination = .activity
         message = nil
         Task { [self] in
-            let result = await cli.get(track: track, settings: snapshot.settings, onProgress: { [weak self] stage in
+            let result = await downloadService.get(track: track, settings: snapshot.settings, approved: approved, onProgress: { [weak self] stage in
                 Task { @MainActor in
-                    guard let self, self.isSaving, let stage = JobStage.progress(stage),
+                    guard let self, self.saveServices[track.id] != nil, let stage = JobStage.progress(stage),
                           var current = self.history.tracks.first(where: { $0.id == track.id }),
                           current.savedPath == nil else { return }
                     current.stage = stage
                     self.history.upsert(current)
                 }
             })
-            isSaving = false
+            saveServices.removeValue(forKey: track.id)
             isCancelling = false
             switch result {
             case .success(var saved):
@@ -163,7 +218,7 @@ final class AppModel {
         }
     }
 
-    func enqueue(_ track: TrackRequest) {
+    func enqueue(_ track: TrackRequest, handoff: ((TrackRequest, String) async -> Result<String, Error>)? = nil) {
         guard track.savedPath != nil, track.spotifyStatus != .added, !pollingJobIDs.contains(track.id) else { return }
         if track.spotifyJobID != nil {
             Task { await poll(track, resume: true) }
@@ -174,6 +229,9 @@ final class AppModel {
             return
         }
         var pending = track
+        // A user explicitly requested Spotify delivery for an imported file;
+        // promote it into normal Activity tracking from this point onward.
+        pending.discoveredFromFolder = false
         pending.spotifyStatus = .pending
         pending.spotifyPlaylistName = track.spotifyPlaylistName ?? track.settingsSnapshot?.playlistName ?? settings.value.playlistName
         pending.spotifyPlaylistURI = nil
@@ -183,7 +241,10 @@ final class AppModel {
         pollingJobIDs.insert(track.id)
         let playlist = track.settingsSnapshot?.playlistName ?? settings.value.playlistName
         Task {
-            switch await spotify.enqueue(track: pending, playlistName: playlist) {
+            let result: Result<String, Error>
+            if let handoff { result = await handoff(pending, playlist) }
+            else { result = await spotify.enqueue(track: pending, playlistName: playlist) }
+            switch result {
             case .success(let id):
                 pending.spotifyJobID = id
                 history.upsert(pending)
@@ -222,7 +283,7 @@ final class AppModel {
                 }
                 if status.status == "pending" {
                     let playlist = track.spotifyPlaylistName ?? track.settingsSnapshot?.playlistName ?? "Needle"
-                    track.errorDetail = "Local-file indexing or companion startup can take a few minutes. Needle will keep checking the \"\(playlist)\" playlist."
+                    track.errorDetail = status.detail ?? "Local-file indexing or companion startup can take a few minutes. Needle will keep checking the \"\(playlist)\" playlist."
                     history.upsert(track)
                 }
                 if status.status == "unknown" {
@@ -239,7 +300,9 @@ final class AppModel {
         }
         track.spotifyStatus = .pending
         track.stage = .spotifyPending
-        track.errorDetail = "Open Spotify and check Local Files. Use Check Spotify to resume this same delivery job."
+        if track.errorDetail == nil || track.errorDetail?.contains("Local-file indexing or companion startup") == true {
+            track.errorDetail = "Open Spotify and check Local Files. Use Check Spotify to resume this same delivery job."
+        }
         history.upsert(track)
     }
 

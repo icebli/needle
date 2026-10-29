@@ -58,6 +58,7 @@ PY
 if [[ "$SKIP_SPOTIFY" == false ]]; then
   mkdir -p "$SPICETIFY_DIR"
   install -m 0644 "$REPO_DIR/spicetify/needle-local-playlist.js" "$SPICETIFY_DIR/needle-local-playlist.js"
+  install -m 0644 "$REPO_DIR/spicetify/needle-discovery.js" "$SPICETIFY_DIR/needle-discovery.js"
 fi
 
 SPICETIFY_BIN="$(command -v spicetify || true)"
@@ -67,7 +68,15 @@ fi
 if [[ "$SKIP_SPOTIFY" == true ]]; then
   echo "Spotify configuration left unchanged (--skip-spotify)"
 elif [[ -n "$SPICETIFY_BIN" ]]; then
-  "$SPICETIFY_BIN" config extensions needle-local-playlist.js
+  CURRENT_EXTENSIONS="$($SPICETIFY_BIN config extensions 2>/dev/null | tr '\n' '|')"
+  CURRENT_EXTENSIONS="${CURRENT_EXTENSIONS%|}"
+  for extension in needle-local-playlist.js needle-discovery.js; do
+    case "|$CURRENT_EXTENSIONS|" in
+      *"|$extension|"*) ;;
+      *) CURRENT_EXTENSIONS="${CURRENT_EXTENSIONS:+$CURRENT_EXTENSIONS|}$extension" ;;
+    esac
+  done
+  "$SPICETIFY_BIN" config extensions "$CURRENT_EXTENSIONS"
   if ! "$SPICETIFY_BIN" apply; then
     echo "Spotify changed since the last Spicetify backup; refreshing the backup before applying extensions" >&2
     "$SPICETIFY_BIN" backup apply
@@ -100,18 +109,23 @@ cp "$REPO_DIR/browser-extension/icons/needle-96.png" "$CHROME_STAGE/icons/needle
 
 if [[ "$CLI_ONLY" == false && "$(uname -s)" == "Darwin" && -f "$REPO_DIR/desktop/Package.swift" ]]; then
   "$SCRIPT_DIR/build-desktop.sh"
-  mkdir -p "$HOME/Applications"
-  # Stage and verify a complete bundle so obsolete resources cannot invalidate
-  # the signature when upgrading an existing installation.
-  APP_STAGE="$(mktemp -d "$HOME/Applications/.needle-install.XXXXXX")"
+  APP_DEST="/Applications/Needle.app"
+  APP_STAGE="$(mktemp -d /Applications/.needle-install.XXXXXX)"
   ditto "$REPO_DIR/target/desktop/Needle.app" "$APP_STAGE/Needle.app"
   codesign --verify --deep --strict "$APP_STAGE/Needle.app"
-  if [[ -e "$HOME/Applications/Needle.app" ]]; then
-    mv "$HOME/Applications/Needle.app" "$APP_STAGE/Previous-Needle.app"
+  cmp "$REPO_DIR/target/release/needle" "$APP_STAGE/Needle.app/Contents/Resources/bin/needle"
+  cmp "$REPO_DIR/target/release/needle-browser-host" "$APP_STAGE/Needle.app/Contents/Resources/bin/needle-browser-host"
+  "$APP_STAGE/Needle.app/Contents/Resources/bin/needle" --help >/dev/null
+  if [[ -e "$APP_DEST" ]]; then
+    mv "$APP_DEST" "$APP_STAGE/Previous-Needle.app"
   fi
-  mv "$APP_STAGE/Needle.app" "$HOME/Applications/Needle.app"
+  mv "$APP_STAGE/Needle.app" "$APP_DEST"
+  codesign --verify --deep --strict "$APP_DEST"
+  cmp "$CARGO_BIN_DIR/needle" "$APP_DEST/Contents/Resources/bin/needle"
+  cmp "$INSTALL_DIR/needle-browser-host" "$APP_DEST/Contents/Resources/bin/needle-browser-host"
+  "$APP_DEST/Contents/Resources/bin/needle" --help >/dev/null
   echo "Previous app backup: $APP_STAGE/Previous-Needle.app"
-  echo "Desktop app: $HOME/Applications/Needle.app"
+  echo "Desktop app: $APP_DEST"
 fi
 
 echo "Firefox native host: $NATIVE_MANIFEST"
@@ -123,6 +137,7 @@ echo "Chrome package: $TARGET_DIR/needle-chrome.zip"
 echo "Self-contained companion package: $TARGET_DIR/needle-companion.zip"
 if [[ "$SKIP_SPOTIFY" == false ]]; then
   echo "Spicetify companion: $SPICETIFY_DIR/needle-local-playlist.js"
+  echo "Spicetify discovery companion: $SPICETIFY_DIR/needle-discovery.js"
 fi
 echo "Load browser-extension/manifest.json temporarily from about:debugging, or install a signed build of the XPI."
 echo "Load target/browser-extension/needle-chrome/ as an unpacked extension at chrome://extensions."

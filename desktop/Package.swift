@@ -17,6 +17,16 @@ let package = Package(
             dependencies: [.product(name: "Sparkle", package: "sparkle")],
             path: "Sources"
         ),
-        .testTarget(name: "NeedleDesktopTests", dependencies: ["NeedleDesktop"], path: "Tests")
+        .testTarget(
+            name: "NeedleDesktopTests",
+            dependencies: ["NeedleDesktop"],
+            path: "Tests",
+            linkerSettings: [.unsafeFlags([
+                "-Xlinker", "-rpath",
+                "-Xlinker", "@loader_path/../../../../../../artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64",
+                "-Xlinker", "-rpath",
+                "-Xlinker", "@loader_path/../../../../../artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64"
+            ])]
+        )
     ]
 )

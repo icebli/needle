@@ -28,6 +28,7 @@ brew config > "$brew_config"
 
 export APP_PATH OUTPUT_DIR MANIFEST TAP_HEAD="$tap_head"
 export DOWNLOAD_SOURCES
+export PACKAGE_RESOLVED="$(cd "$(dirname "$0")/.." && pwd)/desktop/Package.resolved"
 python3 - <<'PY'
 import hashlib
 import json
@@ -42,6 +43,10 @@ import urllib.request
 app = pathlib.Path(os.environ["APP_PATH"])
 out = pathlib.Path(os.environ["OUTPUT_DIR"])
 toolchain = json.loads(pathlib.Path(os.environ["MANIFEST"]).read_text())
+resolved = json.loads(pathlib.Path(os.environ["PACKAGE_RESOLVED"]).read_text())
+sparkle = next(pin["state"] for pin in resolved["pins"] if pin["identity"] == "sparkle")
+sparkle_revision = sparkle["revision"]
+sparkle_version = sparkle["version"]
 
 def sha256(path: pathlib.Path) -> str:
     digest = hashlib.sha256()
@@ -186,8 +191,8 @@ sources = [
     {
         "component": "Sparkle",
         "license": "MIT",
-        "release_url": "https://github.com/sparkle-project/Sparkle/releases/tag/2.10.0",
-        "source_url": "https://github.com/sparkle-project/Sparkle/archive/eef1a539a373c1f1a320624b1130fc5de7b2e100.tar.gz",
+        "release_url": f"https://github.com/sparkle-project/Sparkle/releases/tag/{sparkle_version}",
+        "source_url": f"https://github.com/sparkle-project/Sparkle/archive/{sparkle_revision}.tar.gz",
         "release_checksums_url": None,
         "source_sha256": None,
         "status": "source-archive-checksum-required",
@@ -286,7 +291,7 @@ if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
     extras = [
         ("yt-dlp", f"https://github.com/yt-dlp/yt-dlp/releases/download/{yt_version}/yt-dlp.tar.gz", "GPL-3.0-or-later", f"https://github.com/yt-dlp/yt-dlp/releases/download/{yt_version}/SHA2-256SUMS", "yt-dlp.tar.gz"),
         ("node", f"https://nodejs.org/dist/v{node_version}/node-v{node_version}.tar.gz", "MIT", f"https://nodejs.org/dist/v{node_version}/SHASUMS256.txt", f"node-v{node_version}.tar.gz"),
-        ("sparkle", "https://github.com/sparkle-project/Sparkle/archive/eef1a539a373c1f1a320624b1130fc5de7b2e100.tar.gz", "MIT", None, None),
+        ("sparkle", f"https://github.com/sparkle-project/Sparkle/archive/{sparkle_revision}.tar.gz", "MIT", None, None),
     ]
     for name, url, license_id, checksums_url, checksum_name in extras:
         filename = pathlib.PurePosixPath(url).name
@@ -314,8 +319,8 @@ if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
             "source_url": url,
             "source_sha256": actual,
             "published_sha256": expected,
-            "source_revision": "eef1a539a373c1f1a320624b1130fc5de7b2e100" if name == "sparkle" else None,
-            "package_resolved_revision": "eef1a539a373c1f1a320624b1130fc5de7b2e100" if name == "sparkle" else None,
+            "source_revision": sparkle_revision if name == "sparkle" else None,
+            "package_resolved_revision": sparkle_revision if name == "sparkle" else None,
             "verification_basis": "pinned-package-resolved-revision" if name == "sparkle" else ("official-published-checksum" if expected else None),
             "license": license_id,
             "license_file": str(pathlib.Path("licenses") / f"{name}-LICENSE") if license_name else None,
@@ -335,7 +340,7 @@ if os.environ.get("DOWNLOAD_SOURCES") == "--download-sources":
             "component": name,
             "version": version,
             "source_url": f"https://pypi.org/project/{name}/{version}/",
-            "version_evidence": "yt-dlp 2026.08.19 bundle/requirements/macos.txt (official source archive)",
+            "version_evidence": "yt-dlp 2026.10.26 bundle/requirements/macos.txt (official release tag)",
             "source_sha256": actual,
             "published_sha256": expected,
             "license": license_id,

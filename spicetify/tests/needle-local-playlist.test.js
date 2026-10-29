@@ -80,6 +80,18 @@ test("uses the queued saved path when Spotify exposes it", () => {
   assert.equal(match.uri, "spotify:local:two");
 });
 
+test("keeps the companion poll alive when Spotify local-file lookup fails", async () => {
+  const messages = [];
+  const tracks = await companion.readLocalTracks({
+    getTracks: async () => { throw new Error("LocalFilesAPI unavailable"); },
+  }, async (level, message) => messages.push({ level, message }));
+  assert.equal(tracks, null);
+  assert.deepEqual(messages, [{
+    level: "error",
+    message: "Spotify Local Files lookup failed: LocalFilesAPI unavailable",
+  }]);
+});
+
 test("refuses duplicate local recordings when the queued duration is unavailable", () => {
   const tracks = [
     local("Artist", "Song", "spotify:local:one:189"),
@@ -89,6 +101,47 @@ test("refuses duplicate local recordings when the queued duration is unavailable
     artist: "Artist",
     name: "Song",
   }), null);
+});
+
+test("explains ambiguous duplicate local recordings", () => {
+  const tracks = [
+    { ...localWithDuration("A$AP Mob", "Bath Salt (feat. Flatbush Zombies)", "spotify:local:one:252", 252074), album: { name: "ASAP Rocky & ASAP Ant", artist: { name: "A$AP Mob" } } },
+    { ...localWithDuration("A$AP Mob", "Bath Salt (feat. Flatbush Zombies)", "spotify:local:two:252", 252074), album: { name: "ASAP Rocky & ASAP Ant", artist: { name: "A$AP Mob" } } },
+  ];
+  const match = companion.localTrackMatch(tracks, {
+    artist: "A$AP Mob",
+    name: "Bath Salt (feat. Flatbush Zombies)",
+    album: "ASAP Rocky & ASAP Ant",
+    durationMs: 252074,
+  });
+  assert.equal(match.track, null);
+  assert.equal(match.reason, "Spotify exposed 2 matching local files with the queued duration");
+});
+
+test("uses the queued album to resolve duplicate duration matches", () => {
+  const tracks = [
+    { ...localWithDuration("A$AP Mob", "Bath Salt (feat. Flatbush Zombies)", "spotify:local:other:252", 252074), album: { name: "Other Album", artist: { name: "A$AP Mob" } } },
+    { ...localWithDuration("A$AP Mob", "Bath Salt (feat. Flatbush Zombies)", "spotify:local:needle:252", 252074), album: { name: "ASAP Rocky & ASAP Ant", artist: { name: "A$AP Mob" } } },
+  ];
+  const match = companion.localTrackMatch(tracks, {
+    artist: "A$AP Mob",
+    name: "Bath Salt (feat. Flatbush Zombies)",
+    album: "ASAP Rocky & ASAP Ant",
+    durationMs: 252074,
+  });
+  assert.equal(match.track.uri, "spotify:local:needle:252");
+  assert.equal(match.reason, null);
+});
+
+test("deduplicates repeated Spotify entries with the same URI", () => {
+  const duplicate = localWithDuration("A$AP Mob", "Bath Salt (feat. Flatbush Zombies)", "spotify:local:same:252", 252074);
+  const match = companion.localTrackMatch([duplicate, { ...duplicate }], {
+    artist: "A$AP Mob",
+    name: "Bath Salt (feat. Flatbush Zombies)",
+    durationMs: 252074,
+  });
+  assert.equal(match.track.uri, "spotify:local:same:252");
+  assert.equal(match.reason, null);
 });
 
 test("does not fall back to album tags when queued duration cannot be matched", () => {

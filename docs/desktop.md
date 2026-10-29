@@ -6,11 +6,17 @@ Needle is a macOS companion for bringing recordings into your Spotify local-file
 
 Follow [Getting started](GETTING_STARTED.md) to install Needle. In **Add Music**, enter an artist and title or paste a source link, then choose **Find recordings**. Compare the results, preview a candidate, and choose **Save recording** when it matches what you want.
 
-**Activity** shows saving progress and Spotify delivery. **Library** lists your saved recordings; use **Reveal** to find a file in Finder.
+Drag a source link from your browser onto any tab to add it to **Review Queue**. Needle finds candidates automatically. Check the detected artist and title, then preview and approve the recording. Use **Edit request** to correct source hints. Multiple dropped links join the queue together; downloads still require approval.
+
+**Review Queue** also accepts one link or `Artist — Title` per line, persists your review progress, and runs up to two approved downloads in the background. Each recording requires explicit source approval.
+
+**Library → Repair** edits embedded tags and artwork in place, with a backup before each change. Metadata and original-source artwork are suggestions you approve. See [Getting started](GETTING_STARTED.md#repair-a-saved-recording).
+
+**Activity** shows saving progress and Spotify delivery. **Library** scans `~/Music/needle` when opened, including existing recordings saved through the CLI. Choose **Refresh** after adding files outside the app. Embedded tags supply artist, song, and album; filenames are used when tags are missing. Scanning does not change audio files, and backup/temporary files are skipped. Use **Show in Finder** to find a file.
 
 ## Preview before saving
 
-Use Preview on a source card to listen inside Needle. The app prepares a temporary excerpt of up to 30 seconds from that exact source, with playback, pause, and seeking controls. Only one preview plays at a time. If a provider cannot download a section, Needle temporarily fetches the source audio and trims it locally; preparation can take longer. Switching sources or leaving Add Music stops it; saving is still a separate explicit action. Preview files are temporary and do not enter the music library or Spotify queue.
+Use Preview on a source card to listen to the exact source. Needle prepares full-track temporary audio with playback, pause, scrubbing, ten-second jumps, and Skip intro. Keep position between candidates compares versions at the same timestamp; turning it off remembers each candidate's own position. Only one preview plays at a time. Preparation can take longer for large recordings. Preview files stay outside the music library and Spotify queue.
 
 ## Spotify setup
 
@@ -47,3 +53,13 @@ Needle saves the source you selected; it does not search again during download. 
 - **Wrong recording:** compare the title, duration, identity warnings, and preview before saving. Use an exact source link or duration override for difficult matches.
 
 For help, include the app version and exact error message. Keep passwords and account credentials private.
+
+## In-app guides
+
+Choose the **?** button in any tab to open its guide. Guides explain the controls, common problems, and next steps without leaving Needle.
+
+## Discover
+
+Sync your top 20 Spotify artists, choose up to five, and find source uploads ranked by reported plays/views. Needle checks exact artist/title matches in Spotify, skips existing Library files, and keeps failed catalog checks distinct from no match. **Preview & review** opens the exact source in Review Queue; downloads still require approval. The (?) button explains limits and version checks. Spotify and the bundled Spicetify companion must be running. Use setup’s **Enable / update Needle companion** after installing Spicetify; enabling it restarts Spotify.
+
+In Library, **Add all to Spotify** queues eligible saved MP3s and skips delivered, pending, missing, and other-format entries. Specific Spotify delivery errors appear directly on each pending row.

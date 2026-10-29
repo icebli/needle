@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -77,9 +77,7 @@ fn find_executable(name: &str) -> Option<PathBuf> {
 }
 
 fn check_tool(name: &str, path: &PathBuf, args: &[&str]) -> ToolStatus {
-    let output = Command::new(path)
-        .args(args)
-        .output();
+    let output = Command::new(path).args(args).output();
 
     match output {
         Ok(out) if out.status.success() => {
@@ -126,7 +124,10 @@ mod tests {
             chromaprint_path: None,
         };
         let results = status.verify().unwrap();
-        let fpcalc = results.iter().find(|status| status.name.contains("fpcalc")).unwrap();
+        let fpcalc = results
+            .iter()
+            .find(|status| status.name.contains("fpcalc"))
+            .unwrap();
 
         assert!(fpcalc.optional);
         assert!(fpcalc.ok);

@@ -1,9 +1,9 @@
 import Foundation
 
 enum Destination: String, CaseIterable, Identifiable {
-    case addMusic = "Add Music", activity = "Activity", library = "Library"
+    case addMusic = "Add Music", reviewQueue = "Review Queue", discover = "Discover", bookmarks = "Bookmarks", activity = "Activity", library = "Library"
     var id: String { rawValue }
-    var symbol: String { switch self { case .addMusic: "plus.circle.fill"; case .activity: "clock.fill"; case .library: "music.note.list" } }
+    var symbol: String { switch self { case .addMusic: "plus.circle.fill"; case .reviewQueue: "list.bullet.rectangle"; case .discover: "sparkles"; case .bookmarks: "bookmark.fill"; case .activity: "clock.fill"; case .library: "music.note.list" } }
 }
 
 struct NeedleSettings: Codable, Equatable {
@@ -63,9 +63,13 @@ struct TrackRequest: Codable, Equatable, Identifiable {
     var settingsSnapshot: NeedleSettings?
     var errorDetail: String?
     var date: Date
+    /// True when the file was discovered on disk rather than downloaded in this app session.
+    /// Optional for compatibility with history written by older releases.
+    var discoveredFromFolder: Bool?
 
-    init(id: UUID = UUID(), artist: String, title: String, album: String = "", sourceURL: String = "", savedPath: String? = nil, spotifyStatus: SpotifyStatus = .notQueued, spotifyJobID: String? = nil, spotifyPlaylistName: String? = nil, spotifyPlaylistURI: String? = nil, stage: JobStage = .saving, settingsSnapshot: NeedleSettings? = nil, date: Date = .now) {
+    init(id: UUID = UUID(), artist: String, title: String, album: String = "", sourceURL: String = "", savedPath: String? = nil, spotifyStatus: SpotifyStatus = .notQueued, spotifyJobID: String? = nil, spotifyPlaylistName: String? = nil, spotifyPlaylistURI: String? = nil, stage: JobStage = .saving, settingsSnapshot: NeedleSettings? = nil, date: Date = .now, discoveredFromFolder: Bool? = nil) {
         self.id = id; self.artist = artist; self.title = title; self.album = album; self.sourceURL = sourceURL; self.savedPath = savedPath; self.spotifyStatus = spotifyStatus; self.spotifyJobID = spotifyJobID; self.spotifyPlaylistName = spotifyPlaylistName; self.spotifyPlaylistURI = spotifyPlaylistURI; self.stage = stage; self.settingsSnapshot = settingsSnapshot; self.date = date
+        self.discoveredFromFolder = discoveredFromFolder
     }
 }
 
@@ -91,6 +95,8 @@ struct Candidate: Codable {
     let url: String
     let title: String
     let uploader: String?
+    /// Whether the provider reports the uploader channel as verified.
+    let channelIsVerified: Bool?
     let durationMs: Int?
     let thumbnailURL: String?
     /// View count reported by the source provider, when available.
@@ -102,13 +108,14 @@ struct Candidate: Codable {
     var audioBitrateKbps: UInt32? = nil
 
     init(provider: String, id: String, url: String, title: String, uploader: String?,
-         durationMs: Int?, thumbnailURL: String?, viewCount: UInt64? = nil,
+         durationMs: Int?, thumbnailURL: String?, channelIsVerified: Bool? = nil, viewCount: UInt64? = nil,
          audioCodec: String? = nil, audioBitrateKbps: UInt32? = nil) {
         self.provider = provider
         self.id = id
         self.url = url
         self.title = title
         self.uploader = uploader
+        self.channelIsVerified = channelIsVerified
         self.durationMs = durationMs
         self.thumbnailURL = thumbnailURL
         self.viewCount = viewCount
@@ -117,7 +124,8 @@ struct Candidate: Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case provider, id, url, title, uploader, durationMs
+        case provider, id, url, title, uploader, durationMs, channelIsVerified
+        case channelIsVerifiedSnake = "channel_is_verified"
         case thumbnailURL = "thumbnailUrl"
         case viewCount
         case viewCountSnake = "view_count"
@@ -134,6 +142,8 @@ struct Candidate: Codable {
         url = try container.decode(String.self, forKey: .url)
         title = try container.decode(String.self, forKey: .title)
         uploader = try container.decodeIfPresent(String.self, forKey: .uploader)
+        channelIsVerified = try container.decodeIfPresent(Bool.self, forKey: .channelIsVerified)
+            ?? (try container.decodeIfPresent(Bool.self, forKey: .channelIsVerifiedSnake))
         durationMs = try container.decodeIfPresent(Int.self, forKey: .durationMs)
         thumbnailURL = try container.decodeIfPresent(String.self, forKey: .thumbnailURL)
         viewCount = try container.decodeIfPresent(UInt64.self, forKey: .viewCount)
@@ -151,6 +161,7 @@ struct Candidate: Codable {
         try container.encode(url, forKey: .url)
         try container.encode(title, forKey: .title)
         try container.encodeIfPresent(uploader, forKey: .uploader)
+        try container.encodeIfPresent(channelIsVerified, forKey: .channelIsVerifiedSnake)
         try container.encodeIfPresent(durationMs, forKey: .durationMs)
         try container.encodeIfPresent(thumbnailURL, forKey: .thumbnailURL)
         try container.encodeIfPresent(viewCount, forKey: .viewCountSnake)
@@ -161,6 +172,6 @@ struct Candidate: Codable {
 struct Score: Codable { let confidence: Double?; let status: String; let positives: [String]; let warnings: [String]; let rejects: [String] }
 
 struct HostReceipt: Codable { let ok: Bool; let jobId: String?; let error: String? }
-struct HostStatus: Codable { let ok: Bool; let status: String; let playlistUri: String?; let addedUri: String? }
+struct HostStatus: Codable { let ok: Bool; let status: String; let playlistUri: String?; let addedUri: String?; var detail: String? = nil }
 struct DoctorResponse: Codable { let ok: Bool; let tools: [DoctorTool] }
 struct DoctorTool: Codable { let name: String?; let path: String?; let ok: Bool?; let optional: Bool?; let message: String?; let version: String? }

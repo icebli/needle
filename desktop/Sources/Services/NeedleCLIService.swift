@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Darwin
 
 struct ProcessResult {
@@ -63,6 +64,58 @@ actor NeedleCLIService {
         }
     }
 
+    struct SourceIdentity: Decodable {
+        let ok: Bool
+        let artist: String?
+        let title: String?
+        let uncertain: Bool?
+        let error: String?
+    }
+
+    func identifyURL(_ url: String, settings: NeedleSettings) async -> Result<SourceIdentity, Error> {
+        do {
+            let result = try await execute(["identify-url", url, "--json"], settings: settings)
+            let response = try Self.parseLastJSON(SourceIdentity.self, data: result.output)
+            guard response.ok else { throw CLIError.message(response.error ?? "Edit artist and title to search this link.") }
+            return .success(response)
+        } catch { return .failure(error) }
+    }
+
+    struct LibraryScanTrack: Codable, Equatable {
+        let path: String
+        let artist: String?
+        let title: String?
+        let album: String?
+        let sourceURL: String?
+        let modifiedMs: UInt64?
+
+        enum CodingKeys: String, CodingKey {
+            case path, artist, title, album
+            case sourceURL = "sourceUrl"
+            case modifiedMs
+        }
+    }
+
+    struct LibraryScanResponse: Codable {
+        let ok: Bool
+        let tracks: [LibraryScanTrack]
+        let warnings: [String]
+        let error: String?
+    }
+
+    func scanLibrary(root: String, settings: NeedleSettings) async -> Result<LibraryScanResponse, Error> {
+        do {
+            let data = try await execute(["library-scan", root, "--json"], settings: settings).output
+            let response = try Self.parseLastJSON(LibraryScanResponse.self, data: data)
+            guard response.ok else { throw CLIError.message(response.error ?? "Needle could not scan this folder.") }
+            return .success(response)
+        } catch { return .failure(error) }
+    }
+
+    func runJSONCommand(_ arguments: [String], settings: NeedleSettings) async throws -> Data {
+        try await execute(arguments, settings: settings).output
+    }
+
     func doctor(settings: NeedleSettings) async -> Result<DoctorResponse, Error> {
         do {
             let result = try await execute(["doctor", "--json"], settings: settings)
@@ -70,13 +123,39 @@ actor NeedleCLIService {
         } catch { return .failure(error) }
     }
 
-    func get(track: TrackRequest, settings: NeedleSettings,
+    func prepareMetadata(artist: String, title: String, candidate: Candidate, settings: NeedleSettings) async -> Result<MetadataDraft, Error> {
+        var args = ["prepare", artist, title, "--source-title", candidate.title, "--url", candidate.url]
+        if !settings.albumHint.isEmpty { args += ["--album", settings.albumHint] }
+        if settings.noMetadata { args += ["--no-metadata"] }
+        do {
+            let result = try await execute(args, settings: settings)
+            guard let draft = String(decoding: result.output, as: UTF8.self).split(whereSeparator: \.isNewline).reversed().compactMap({ try? JSONDecoder().decode(MetadataDraft.self, from: Data($0.utf8)) }).first else {
+                throw CLIError.message("Needle returned no metadata to review.")
+            }
+            guard draft.sourceURL == candidate.url else {
+                throw CLIError.message("Metadata does not belong to the selected recording.")
+            }
+            return .success(draft)
+        } catch { return .failure(error) }
+    }
+
+    func get(track: TrackRequest, settings: NeedleSettings, approved: MetadataDraft? = nil,
              onProgress: @escaping @Sendable (String) -> Void = { _ in }) async -> Result<TrackRequest, Error> {
         var args = ["get", track.artist, track.title, "--url", track.sourceURL,
                     "--yes", "--strict", "--json", "--events", "--format", settings.format]
         if !track.album.isEmpty { args += ["--album", track.album] }
         appendMetadataOptions(settings, to: &args)
         do {
+            if let approved {
+                guard approved.sourceURL == track.sourceURL else {
+                    throw CLIError.message("The approved metadata belongs to a different recording.")
+                }
+                let data = try JSONEncoder().encode(approved)
+                guard let json = String(data: data, encoding: .utf8) else {
+                    throw CLIError.message("Could not encode approved metadata.")
+                }
+                args += ["--approved-tags", json]
+            }
             let result = try await execute(args, settings: settings, onProgress: onProgress)
             struct Saved: Decodable {
                 let ok: Bool
@@ -110,15 +189,10 @@ actor NeedleCLIService {
     func cancel() {
         guard let process = activeProcess, process.isRunning else { return }
         wasCancelled = true
-        // Stop only descendants of this operation, then its CLI. yt-dlp/ffmpeg
-        // otherwise survive terminating their parent and retain the output pipes.
-        for pid in Self.descendants(of: process.processIdentifier).reversed() {
-            Darwin.kill(pid, SIGTERM)
-        }
-        process.terminate()
+        Self.terminateOwnedProcess(process)
     }
 
-    private static func descendants(of parent: Int32) -> [Int32] {
+    private nonisolated static func descendants(of parent: Int32) -> [Int32] {
         let ps = Process()
         ps.executableURL = URL(fileURLWithPath: "/bin/ps")
         ps.arguments = ["-axo", "pid=,ppid="]
@@ -141,6 +215,42 @@ actor NeedleCLIService {
         return result
     }
 
+    private struct ProcessIdentity: Sendable {
+        let pid: Int32
+        let start: String
+    }
+
+    private nonisolated static func processIdentity(_ pid: Int32) -> ProcessIdentity? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", String(pid), "-o", "pid=,lstart="]
+        let pipe = Pipe(); process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+        let fields = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isWhitespace)
+        guard fields.count >= 6, let parsed = Int32(fields[0]) else { return nil }
+        return ProcessIdentity(pid: parsed, start: fields.dropFirst().joined(separator: " "))
+    }
+
+    private nonisolated static func matchesCurrentProcess(_ identity: ProcessIdentity) -> Bool {
+        guard let current = processIdentity(identity.pid) else { return false }
+        return current.pid == identity.pid && current.start == identity.start
+    }
+
+    private nonisolated static func terminateOwnedProcess(_ process: Process) {
+        let descendants = descendants(of: process.processIdentifier).compactMap(processIdentity)
+        // Stop only descendants of this operation, then its CLI. yt-dlp/ffmpeg
+        // otherwise survive terminating their parent and retain the output pipes.
+        for identity in descendants.reversed() { Darwin.kill(identity.pid, SIGTERM) }
+        if process.isRunning { process.terminate() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
+            if process.isRunning { Darwin.kill(process.processIdentifier, SIGKILL) }
+            for identity in descendants where matchesCurrentProcess(identity) {
+                Darwin.kill(identity.pid, SIGKILL)
+            }
+        }
+    }
+
     private func execute(_ args: [String], settings: NeedleSettings,
                          onProgress: @escaping @Sendable (String) -> Void = { _ in }) async throws -> ProcessResult {
         guard activeProcess == nil else { throw CLIError.message("Needle is already working. Wait or cancel the current operation.") }
@@ -161,6 +271,10 @@ actor NeedleCLIService {
         try process.run()
         activeProcess = process
         wasCancelled = false
+        let quitObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+            Self.terminateOwnedProcess(process)
+        }
+        defer { NotificationCenter.default.removeObserver(quitObserver) }
         let result = await withCheckedContinuation { (continuation: CheckedContinuation<ProcessResult, Never>) in
             DispatchQueue.global().async {
                 let group = DispatchGroup()

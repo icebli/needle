@@ -17,13 +17,48 @@ struct ActivityView: View {
                         .disabled(model.isCancelling)
                 }
             }
-            if model.history.tracks.isEmpty {
+            let activityTracks = model.history.tracks.filter { $0.discoveredFromFolder != true }
+            if activityTracks.isEmpty {
                 ContentUnavailableView("Your collection starts here", systemImage: "tray",
                                        description: Text("Find and approve a recording in Add Music."))
             } else {
-                List(model.history.tracks) { track in TrackRow(track: track, model: model) }.listStyle(.inset)
+                List(activityTracks) { track in TrackRow(track: track, model: model) }.listStyle(.inset)
             }
         }.padding(32)
+    }
+}
+
+private struct ActivityArtwork: View {
+    let track: TrackRequest
+    let model: AppModel
+    let fallbackSymbol: String
+    @State private var artworkPath: String?
+
+    var body: some View {
+        Group {
+            if let artworkPath, let image = NSImage(contentsOfFile: artworkPath) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: fallbackSymbol)
+                    .font(.title2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .frame(width: 34, height: 34)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .accessibilityLabel(artworkPath == nil ? "No embedded artwork" : "Embedded artwork for \(track.title)")
+        .task(id: track.savedPath) {
+            artworkPath = nil
+            guard track.savedPath != nil else { return }
+            let result = await LibraryRepairService().inspect(track, settings: model.settings.value)
+            guard !Task.isCancelled else { return }
+            if case .success(let inspection) = result {
+                artworkPath = inspection.artwork.first?.extractedPath
+            }
+        }
     }
 }
 
@@ -33,8 +68,8 @@ struct TrackRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 14) {
-                Image(systemName: track.savedPath == nil ? "waveform" : "music.note")
-                    .font(.title2).foregroundStyle(.orange).frame(width: 34)
+                ActivityArtwork(track: track, model: model,
+                               fallbackSymbol: track.savedPath == nil ? "waveform" : "music.note")
                 VStack(alignment: .leading, spacing: 5) {
                     Text(track.title).font(.headline)
                     Text(track.artist + (track.album.isEmpty ? "" : " · \(track.album)")).foregroundStyle(.secondary)
@@ -80,12 +115,20 @@ struct TrackRow: View {
                 }.font(.caption)
             }
             if let detail = track.errorDetail {
-                DisclosureGroup("Details") { Text(detail).font(.caption).textSelection(.enabled) }.font(.caption)
+                if track.spotifyStatus == .pending {
+                    Text(detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                } else {
+                    DisclosureGroup("Details") { Text(detail).font(.caption).textSelection(.enabled) }.font(.caption)
+                }
             }
         }.padding(.vertical, 12)
     }
 
     private func activityLabel(for track: TrackRequest) -> String {
+        if track.spotifyStatus == .pending,
+           track.errorDetail?.hasPrefix("Open Spotify Local Files and choose the recording:") == true {
+            return "File saved · Spotify needs a recording choice"
+        }
         guard track.spotifyStatus == .pending,
               let playlist = track.spotifyPlaylistName,
               track.savedPath != nil else { return track.stage.label }
@@ -93,6 +136,10 @@ struct TrackRow: View {
     }
 
     private func activitySymbol(for track: TrackRequest) -> String {
+        if track.spotifyStatus == .pending,
+           track.errorDetail?.hasPrefix("Open Spotify Local Files and choose the recording:") == true {
+            return "exclamationmark.triangle"
+        }
         if track.spotifyStatus == .added { return "checkmark.circle.fill" }
         if track.spotifyStatus == .failed || track.stage == .failed { return "exclamationmark.triangle.fill" }
         if track.spotifyStatus == .pending { return "hourglass" }

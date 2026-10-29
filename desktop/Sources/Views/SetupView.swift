@@ -3,16 +3,34 @@ import AppKit
 
 struct SetupView: View {
     let model: AppModel
+    var expandedInitially = false
+    @State private var expanded = false
+    @State private var installingCompanion = false
+    @State private var companionMessage: String?
     private var folder: String { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Music/needle").path }
 
     var body: some View {
-        DisclosureGroup {
+        DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("1. In Spotify desktop Settings, enable Show Local Files.")
                 Text("2. Add this folder as a source:")
                 Text(folder).font(.callout.monospaced()).textSelection(.enabled)
-                Text("3. Optional playlist delivery uses the Needle Spicetify companion. Without it, saved music is still available through Spotify Local Files.")
+                Text("3. Playlist delivery and artist discovery use Needle’s bundled Spicetify companion. Enable it after installing Spicetify. Spotify will restart when you enable or update the companion.")
                     .foregroundStyle(.secondary)
+                HStack {
+                    Link("Install Spicetify", destination: URL(string: "https://spicetify.app/")!)
+                    Button(installingCompanion ? "Enabling companion…" : "Enable / update Needle companion") {
+                        installingCompanion = true; companionMessage = nil
+                        Task {
+                            defer { installingCompanion = false }
+                            do {
+                                try await CompanionSetupService().install()
+                                companionMessage = "Needle’s companion is enabled. Open Spotify, then sync artists or check delivery."
+                            } catch { companionMessage = error.localizedDescription }
+                        }
+                    }.disabled(installingCompanion)
+                }
+                if let companionMessage { Text(companionMessage).font(.caption).textSelection(.enabled) }
                 HStack {
                     Button("Open Spotify") {
                         if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.spotify.client") {
@@ -38,6 +56,7 @@ struct SetupView: View {
                   systemImage: model.tools?.ok == true ? "checkmark.circle" : "slider.horizontal.3")
                 .font(.callout.weight(.medium))
         }
+        .onAppear { if expandedInitially { expanded = true } }
         .padding(18).background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
     }
 }

@@ -1,5 +1,5 @@
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use anyhow::{Result, bail};
 
 /// Raw user request before parsing
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,5 +108,20 @@ mod tests {
     #[test]
     fn parse_combined_err() {
         assert!(TrackRequest::from_combined("no dash here").is_err());
+    }
+
+    #[test]
+    fn output_format_names_match_ffmpeg_codecs() {
+        assert_eq!(OutputFormat::default(), OutputFormat::Mp3);
+        let cases = [
+            (OutputFormat::Mp3, "mp3", "libmp3lame"),
+            (OutputFormat::M4a, "m4a", "aac"),
+            (OutputFormat::Opus, "opus", "libopus"),
+            (OutputFormat::Flac, "flac", "flac"),
+        ];
+        for (format, extension, codec) in cases {
+            assert_eq!(format.extension(), extension);
+            assert_eq!(format.ffmpeg_codec(), codec);
+        }
     }
 }

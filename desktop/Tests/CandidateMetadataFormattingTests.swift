@@ -24,4 +24,10 @@ final class CandidateMetadataFormattingTests: XCTestCase {
         XCTAssertEqual(candidate.audioCodec, "opus")
         XCTAssertEqual(candidate.audioBitrateKbps, 160)
     }
+    func testSearchResponseDecodesVerifiedChannel() throws {
+        let data = Data(#"{"ok":true,"request":{"artist":"The Weeknd","title":"Wanderlust"},"metadata":null,"candidates":[{"candidate":{"provider":"youtube","id":"abc","url":"https://youtube.com/watch?v=abc","title":"Wanderlust","uploader":"The Weeknd","channel_is_verified":true,"duration_ms":307000,"thumbnail_url":null},"score":{"confidence":60,"status":"uncertain","positives":[],"warnings":[],"rejects":[]}}]}"#.utf8)
+        let response = try NeedleCLIService.parseLastJSON(SearchResponse.self, data: data)
+        XCTAssertEqual(response.candidates.first?.candidate.channelIsVerified, true)
+    }
+
 }
