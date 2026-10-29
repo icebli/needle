@@ -1,3 +1,6 @@
+mod artwork;
+pub use artwork::ArtworkReference;
+
 use crate::normalize::normalize_title;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -17,6 +20,8 @@ pub struct TrackMetadata {
     pub track_number: Option<u32>,
     pub disc_number: Option<u32>,
     pub artwork_url: Option<String>,
+    #[serde(default)]
+    pub artwork: Option<ArtworkReference>,
     pub isrc: Option<String>,
     pub external_ids: ExternalIds,
     /// Which resolver produced this result and its plausibility score
@@ -31,6 +36,8 @@ pub struct MetadataSource {
     /// MB release MBID for the preferred (Single/Album) release — used to fetch URL relations
     #[serde(skip)]
     pub preferred_release_id: Option<String>,
+    #[serde(skip)]
+    pub preferred_release_group_id: Option<String>,
     /// Canonical streaming URL from MB release URL relations
     pub canonical_url: Option<String>,
 }
@@ -63,9 +70,11 @@ pub async fn resolve_metadata(artist: &str, title: &str) -> Result<Option<TrackM
     // snippets/interviews. The scorer treats duration as high-trust, so bad
     // reference duration is worse than missing duration.
     let chosen = choose_plausible_metadata(artist, title, musicbrainz, apple);
-    let Some(chosen) = chosen else {
+    let Some(mut chosen) = chosen else {
         return Ok(None);
     };
+
+    artwork::enrich_artwork(&mut chosen).await;
 
     debug!("metadata resolved: {} - {}", chosen.artist, chosen.title);
     Ok(Some(chosen))
@@ -228,6 +237,8 @@ struct MbRelease {
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct MbReleaseGroup {
+    #[serde(default)]
+    id: Option<String>,
     #[serde(default)]
     #[serde(rename = "primary-type")]
     primary_type: Option<String>,
@@ -512,6 +523,9 @@ fn mb_recording_to_metadata(artist: &str, title: &str, rec: MbRecording) -> Trac
 
     let mb_id = rec.id.clone();
     let preferred_release_id = preferred_release.map(|r| r.id.clone());
+    let preferred_release_group_id = preferred_release
+        .and_then(|release| release.release_group.as_ref())
+        .and_then(|group| group.id.clone());
     TrackMetadata {
         artist: primary_artist,
         featured_artists,
@@ -523,6 +537,7 @@ fn mb_recording_to_metadata(artist: &str, title: &str, rec: MbRecording) -> Trac
         track_number,
         disc_number: None,
         artwork_url: None,
+        artwork: None,
         isrc: rec.isrcs.into_iter().next(),
         external_ids: ExternalIds {
             musicbrainz_recording_id: Some(rec.id),
@@ -532,6 +547,7 @@ fn mb_recording_to_metadata(artist: &str, title: &str, rec: MbRecording) -> Trac
             provider: "musicbrainz".into(),
             recording_id: Some(mb_id),
             preferred_release_id,
+            preferred_release_group_id,
             plausibility_score: 0,
             canonical_url: None,
         },
@@ -569,9 +585,30 @@ mod tests {
             track_count,
             media: vec![],
             release_group: rg_type.map(|t| MbReleaseGroup {
+                id: None,
                 primary_type: Some(t.to_string()),
             }),
         }
+    }
+
+    #[test]
+    fn selected_release_keeps_its_group_for_artwork_lookup() {
+        let mut selected = release("rel-single", "My Song", Some(1), Some("Single"));
+        selected.release_group.as_mut().unwrap().id = Some("group-single".into());
+        let metadata = mb_recording_to_metadata(
+            "TestArtist",
+            "My Song",
+            make_recording("My Song", vec![selected]),
+        );
+        assert_eq!(
+            metadata.source.preferred_release_id.as_deref(),
+            Some("rel-single")
+        );
+        assert_eq!(
+            metadata.source.preferred_release_group_id.as_deref(),
+            Some("group-single")
+        );
+        assert!(metadata.artwork.is_none());
     }
 
     #[test]
@@ -824,6 +861,7 @@ fn itunes_track_to_metadata(title: &str, track: ItunesTrack) -> TrackMetadata {
         track_number: track.trackNumber,
         disc_number: track.discNumber,
         artwork_url: track.artworkUrl100,
+        artwork: None,
         isrc: None,
         external_ids: ExternalIds {
             apple_music_id: track.trackViewUrl,
@@ -834,6 +872,7 @@ fn itunes_track_to_metadata(title: &str, track: ItunesTrack) -> TrackMetadata {
             plausibility_score: 0,
             recording_id: None,
             preferred_release_id: None,
+            preferred_release_group_id: None,
             canonical_url: None,
         },
     }

@@ -39,6 +39,7 @@ struct AddMusicView: View {
                                   artist: model.requestSnapshot?.artist ?? artist,
                                   title: model.requestSnapshot?.title ?? title,
                                   album: model.requestSnapshot?.album ?? album,
+                                  artwork: model.metadata?.resolvedArtwork,
                                   bookmarks: model.bookmarks, preview: preview,
                                   disabled: model.isSearching || model.isCheckingTools || preparingMetadata,
                                   saveLabel: preparingMetadata ? "Preparing metadata…" : "Review metadata",

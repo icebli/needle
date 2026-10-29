@@ -6,6 +6,7 @@ struct ListeningRoomView: View {
     let artist: String
     let title: String
     let album: String
+    var artwork: ArtworkReference? = nil
     let bookmarks: BookmarkStore
     @ObservedObject var preview: AudioPreviewService
     let disabled: Bool
@@ -64,7 +65,17 @@ struct ListeningRoomView: View {
 
     private func recordingHeader(_ result: CandidateResult, width: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 22) {
-            ListeningRoomArtwork(candidate: result.candidate, size: min(260, max(170, width * 0.38)))
+            Group {
+                if let artwork {
+                    AlbumArtworkView(artwork: artwork) {
+                        ListeningRoomArtwork(candidate: result.candidate, size: min(260, max(170, width * 0.38)))
+                    }
+                    .frame(width: min(260, max(170, width * 0.38)), height: min(260, max(170, width * 0.38)))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                } else {
+                    ListeningRoomArtwork(candidate: result.candidate, size: min(260, max(170, width * 0.38)))
+                }
+            }
             VStack(alignment: .leading, spacing: 10) {
                 Text(title.isEmpty ? "Untitled recording" : title)
                     .font(.system(size: 28, weight: .semibold, design: .serif))
@@ -173,7 +184,7 @@ struct ListeningRoomView: View {
                 .help(result.score.status == "rejected" ? "Excluded sources cannot be approved." : "Review metadata before saving this source.")
                 Button {
                     bookmarks.toggle(artist: artist, title: title, album: album,
-                                     candidate: result.candidate, score: result.score)
+                                     candidate: result.candidate, score: result.score, artwork: artwork)
                 } label: {
                     Label(bookmarks.contains(candidate: result.candidate) ? "Bookmarked" : "Save to bookmarks",
                           systemImage: bookmarks.contains(candidate: result.candidate) ? "bookmark.fill" : "bookmark")

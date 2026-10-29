@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use console::style;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::path::PathBuf;
 use std::time::Duration;
 use strsim::jaro_winkler;
@@ -562,37 +563,57 @@ fn approved_tags_metadata(tags: &ApprovedTags) -> needle_core::TrackMetadata {
 }
 
 async fn download_approved_artwork(url: &str) -> Result<PathBuf> {
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        bail!("approved artwork URL must use HTTP(S)");
-    }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()?;
-    let response = client.get(url).send().await?.error_for_status()?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > 10 * 1024 * 1024)
-    {
-        bail!("approved artwork exceeds 10 MiB limit");
-    }
-    let declared = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    let mut response = response;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        if bytes.len().saturating_add(chunk.len()) > 10 * 1024 * 1024 {
+    let location = reqwest::Url::parse(url)?;
+    let (bytes, declared) = if location.scheme() == "file" {
+        let path = location
+            .to_file_path()
+            .map_err(|_| anyhow::anyhow!("artwork must be a local file URL"))?;
+        if !std::fs::metadata(&path)?.is_file() {
+            bail!("artwork must be a regular image file");
+        }
+        let file = std::fs::File::open(path)?;
+        if !file.metadata()?.is_file() {
+            bail!("artwork must be a regular image file");
+        }
+        let mut bytes = Vec::new();
+        file.take(10 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        if bytes.len() > 10 * 1024 * 1024 {
             bail!("approved artwork exceeds 10 MiB limit");
         }
-        bytes.extend_from_slice(&chunk);
-    }
+        (bytes, String::new())
+    } else {
+        if !matches!(location.scheme(), "https" | "http") {
+            bail!("approved artwork must use HTTP(S) or a local file URL");
+        }
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
+        let mut response = client.get(location).send().await?.error_for_status()?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > 10 * 1024 * 1024)
+        {
+            bail!("approved artwork exceeds 10 MiB limit");
+        }
+        let declared = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if bytes.len().saturating_add(chunk.len()) > 10 * 1024 * 1024 {
+                bail!("approved artwork exceeds 10 MiB limit");
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        (bytes, declared)
+    };
     let (mime, extension) = detect_artwork_type(&bytes)
         .ok_or_else(|| anyhow::anyhow!("approved artwork URL did not return a recognized image"))?;
     if !declared.is_empty()
@@ -1008,11 +1029,15 @@ async fn cmd_get(options: GetOptions) -> Result<()> {
     } else {
         metadata_for_tagging(metadata.as_ref(), &req.title, req.album.as_deref())
     };
-    let approved_artwork_path = if let Some(ref approved) = approved_tags {
-        if approved.artwork_url.trim().is_empty() {
-            None
-        } else {
-            Some(download_approved_artwork(&approved.artwork_url).await?)
+    let artwork_url = artwork_for_tagging(approved_tags.as_ref(), tag_metadata.as_ref());
+    let approved_artwork_path = if let Some(url) = artwork_url {
+        match download_approved_artwork(url).await {
+            Ok(path) => Some(path),
+            Err(error) if approved_tags.is_some() => return Err(error),
+            Err(error) => {
+                eprintln!("Artwork unavailable; saving audio without a cover: {error}");
+                None
+            }
         }
     } else {
         None
@@ -1665,6 +1690,20 @@ fn has_mix_variant(value: &str) -> bool {
         .any(|word| word == "mix" || word == "remix" || word.ends_with("mix"))
 }
 
+fn artwork_for_tagging<'a>(
+    approved: Option<&'a ApprovedTags>,
+    metadata: Option<&'a needle_core::TrackMetadata>,
+) -> Option<&'a str> {
+    if let Some(approved) = approved {
+        return (!approved.artwork_url.trim().is_empty()).then_some(approved.artwork_url.as_str());
+    }
+    metadata?
+        .artwork
+        .as_ref()
+        .filter(|artwork| artwork.provider == "cover_art_archive")
+        .map(|artwork| artwork.url.as_str())
+}
+
 fn metadata_for_tagging(
     metadata: Option<&needle_core::TrackMetadata>,
     request_title: &str,
@@ -1673,6 +1712,8 @@ fn metadata_for_tagging(
     let mut metadata = metadata?.clone();
     if requested_variant_conflicts_with_metadata(request_title, &metadata.title) {
         metadata.title = clean_title_fragment(request_title);
+        metadata.artwork_url = None;
+        metadata.artwork = None;
         metadata.album = request_album.map(str::to_owned);
         metadata.track_number = None;
         metadata.disc_number = None;
@@ -2383,6 +2424,7 @@ esac
             disc_number: None,
             isrc: None,
             artwork_url: None,
+            artwork: None,
             possible_titles: Vec::new(),
             external_ids: Default::default(),
             source: Default::default(),
@@ -2553,6 +2595,67 @@ esac
         let tagged = metadata_for_tagging(Some(&base), "Throw It in the Bag Remix", None).unwrap();
         assert_eq!(tagged.title, "Throw It in the Bag Remix");
         assert_eq!(tagged.featured_artists, vec!["Drake"]);
+    }
+
+    #[tokio::test]
+    async fn approved_local_artwork_is_copied_and_non_images_are_rejected() {
+        let source =
+            std::env::temp_dir().join(format!("needle-artwork-test-{}.png", std::process::id()));
+        std::fs::write(&source, b"\x89PNG\r\n\x1a\nimage fixture").unwrap();
+        let url = reqwest::Url::from_file_path(&source).unwrap();
+        let copied = download_approved_artwork(url.as_str()).await.unwrap();
+        assert_eq!(
+            std::fs::read(&copied).unwrap(),
+            std::fs::read(&source).unwrap()
+        );
+        std::fs::remove_file(copied).unwrap();
+        std::fs::write(&source, b"not an image").unwrap();
+        assert!(download_approved_artwork(url.as_str()).await.is_err());
+        std::fs::remove_file(source).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn local_cover_rejects_named_pipes_without_waiting_for_a_writer() {
+        let path = std::env::temp_dir().join(format!("needle-cover-pipe-{}", std::process::id()));
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success());
+        let url = reqwest::Url::from_file_path(&path).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            download_approved_artwork(url.as_str()),
+        )
+        .await;
+        std::fs::remove_file(path).unwrap();
+        assert!(result.unwrap().is_err());
+    }
+
+    #[test]
+    fn cli_embeds_catalog_cover_but_respects_explicit_empty_artwork() {
+        let mut meta = metadata("Artist", "Song");
+        meta.artwork = Some(needle_core::metadata::ArtworkReference {
+            url: "https://coverartarchive.org/image.jpg".into(),
+            provider: "cover_art_archive".into(),
+            release_id: None,
+            release_group_id: None,
+        });
+        assert_eq!(
+            artwork_for_tagging(None, Some(&meta)),
+            Some("https://coverartarchive.org/image.jpg")
+        );
+        let approved = parse_approved_tags(r#"{"artist":"Artist","title":"Song","source_url":"https://example.org/song","artwork_url":""}"#).unwrap();
+        assert_eq!(artwork_for_tagging(Some(&approved), Some(&meta)), None);
+    }
+
+    #[test]
+    fn remix_metadata_does_not_retain_original_album_art() {
+        let mut original = metadata("Artist", "Song");
+        original.artwork_url = Some("https://images.example/original.jpg".into());
+        let tags = metadata_for_tagging(Some(&original), "Song (DJ Remix)", None).unwrap();
+        assert!(tags.artwork_url.is_none());
     }
 
     #[test]

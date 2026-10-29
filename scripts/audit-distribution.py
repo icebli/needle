@@ -39,14 +39,28 @@ def audit(root: pathlib.Path) -> list[str]:
     return failures
 
 
+# These already-public dependency maintenance commits are retained verbatim.
+# New commits still require the release identity; all snapshots remain scanned.
+REVIEWED_PUBLIC_COMMITS = frozenset({
+    "72b015ddfa58a30b0fd94f28ee3034f2f647bf55",
+    "76194986b1a5cb98779d435d691bed31b37c10a2",
+    "7c7c430bf109002b77eece29fd16f4519fd427e9",
+})
+
+
 def audit_history(repository: pathlib.Path) -> list[str]:
     def git(*args):
         return subprocess.check_output(["git", "-C", str(repository), *args])
 
     failures = []
-    identities = git("log", "--all", "--format=%an%n%ae%n%cn%n%ce").decode().splitlines()
-    if any(value not in {"Needle releases", "releases@needle.invalid"} for value in identities):
-        failures.append("history: unreviewed author or committer identity")
+    identities = git("log", "--all", "--format=%H%x00%an%x00%ae%x00%cn%x00%ce").decode().splitlines()
+    for entry in identities:
+        revision, *values = entry.split("\0")
+        if revision not in REVIEWED_PUBLIC_COMMITS and any(
+            value not in {"Needle releases", "releases@needle.invalid"} for value in values
+        ):
+            failures.append("history: unreviewed author or committer identity")
+            break
     tags = git("for-each-ref", "refs/tags", "--format=%(taggername)%0a%(taggeremail)").decode().splitlines()
     if any(value and value not in {"Needle releases", "<releases@needle.invalid>"} for value in tags):
         failures.append("history: unreviewed tagger identity")

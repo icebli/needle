@@ -168,7 +168,8 @@ private struct ReviewItemView: View {
                     .padding(.vertical, 8)
                     Divider()
                     ListeningRoomView(candidates: response.candidates, artist: item.artist, title: item.title,
-                                      album: response.metadata?.album ?? "", bookmarks: bookmarks, preview: preview,
+                                      album: response.metadata?.album ?? "", artwork: response.metadata?.resolvedArtwork,
+                                      bookmarks: bookmarks, preview: preview,
                                       disabled: preparingMetadata,
                                       saveLabel: preparingMetadata ? "Preparing metadata…" : "Review metadata") { candidate in
                         preview.stop()

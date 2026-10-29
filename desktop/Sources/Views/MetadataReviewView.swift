@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct MetadataDraft: Codable, Identifiable {
     var artist: String
@@ -11,6 +13,13 @@ struct MetadataDraft: Codable, Identifiable {
     let sourceURL: String
 
     var id: String { sourceURL }
+
+    @MainActor var artworkLocation: URL? {
+        if let remote = AppModel.mediaURL(artworkURL) { return remote }
+        guard let local = URL(string: artworkURL), local.isFileURL,
+              local.host == nil || local.host == "" || local.host == "localhost" else { return nil }
+        return local
+    }
 
     enum CodingKeys: String, CodingKey {
         case artist
@@ -80,27 +89,35 @@ struct MetadataReviewView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Release artwork").font(.headline)
             HStack(alignment: .top, spacing: 14) {
-                if let artworkURL = AppModel.mediaURL(draft.artworkURL), !draft.artworkURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    AsyncImage(url: artworkURL) { phase in
-                        switch phase {
-                        case .success(let image): image.resizable().scaledToFill()
-                        case .empty: ProgressView()
-                        case .failure: artworkMissing
-                        @unknown default: artworkMissing
-                        }
+                if let location = draft.artworkLocation {
+                    Group {
+                        if location.isFileURL, let image = NSImage(contentsOf: location) {
+                            Image(nsImage: image).resizable().scaledToFill()
+                        } else if !location.isFileURL {
+                            AlbumArtworkView(artwork: ArtworkReference(url: location.absoluteString, provider: "selected", releaseId: nil, releaseGroupId: nil)) {
+                                artworkMissing
+                            }
+                        } else { artworkMissing }
                     }
                     .frame(width: 112, height: 112)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .accessibilityLabel("Release artwork preview")
+                    .accessibilityLabel("Selected cover preview")
                 } else {
                     artworkMissing
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(draft.artworkURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                         ? "No release artwork found. This recording will save without embedded cover art."
-                         : "This is metadata artwork, not the source upload thumbnail.")
+                    Text(artworkDescription)
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                    HStack {
+                        if let source = candidate.candidate.thumbnailURL, AppModel.mediaURL(source) != nil {
+                            Button("Use source artwork") { draft.artworkURL = source }
+                        }
+                        Button("Choose image…", action: chooseArtwork)
+                        if !draft.artworkURL.isEmpty {
+                            Button("Clear") { draft.artworkURL = "" }
+                        }
+                    }
                     TextField("Artwork URL (optional)", text: $draft.artworkURL)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Release artwork URL")
@@ -109,6 +126,23 @@ struct MetadataReviewView: View {
         }
         .padding(14)
         .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var artworkDescription: String {
+        if draft.artworkURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "No cover selected. Choose an image or use the source artwork."
+        }
+        if draft.artworkLocation?.isFileURL == true { return "Your selected image will be embedded in the recording." }
+        if draft.artworkURL == candidate.candidate.thumbnailURL { return "Source upload artwork selected as the cover." }
+        return "Review this cover before saving the recording."
+    }
+
+    private func chooseArtwork() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.jpeg, .png, .gif]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK, let url = panel.url { draft.artworkURL = url.absoluteString }
     }
 
     private var artworkMissing: some View {
@@ -171,7 +205,7 @@ struct MetadataReviewView: View {
         let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let artwork = draft.artworkURL.trimmingCharacters(in: .whitespacesAndNewlines)
         return !artist.isEmpty && !title.isEmpty &&
-            (artwork.isEmpty || AppModel.mediaURL(artwork) != nil)
+            (artwork.isEmpty || draft.artworkLocation != nil)
     }
 
     private func cancel() {

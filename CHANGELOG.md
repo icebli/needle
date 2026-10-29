@@ -2,6 +2,14 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.9.0
+
+- Fetch album covers from Cover Art Archive for the selected MusicBrainz release, with release-group fallback and retained provenance.
+- Preserve album artwork in the Listening Room and bookmarks while keeping source upload thumbnails in the inspector.
+- Cache covers across launches for offline display, with bounded lookups, downloads, and disk use.
+- Choose a local cover or explicitly use source artwork during metadata review.
+- Embed resolved catalog covers in CLI saves and discard incompatible original-release artwork for remix requests.
+
 ## 0.8.1
 
 - Rebuilt the recording workspace around large artwork, compact source rows, and a dedicated right evidence inspector.

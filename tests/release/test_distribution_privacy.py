@@ -4,6 +4,7 @@ import pathlib
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("audit", pathlib.Path(__file__).parents[2] / "scripts/audit-distribution.py")
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -72,6 +73,19 @@ class PrivacyTests(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.commit(root, "README.md", "public", committer=("Private committer", "person" + "@" + "private.test"))
         self.assertIn("history: unreviewed author or committer identity", MODULE.audit_history(root))
+
+    def test_reviewed_commit_identity_does_not_exempt_new_commits_or_private_content(self):
+        folder, root = self.make_repository()
+        self.addCleanup(folder.cleanup)
+        identity = ("Existing public maintainer", "public" + "@" + "example.org")
+        self.commit(root, ".beads/config.yaml", "internal", committer=identity)
+        revision = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+        with patch.object(MODULE, "REVIEWED_PUBLIC_COMMITS", {revision}):
+            errors = MODULE.audit_history(root)
+            self.assertNotIn("history: unreviewed author or committer identity", errors)
+            self.assertTrue(any("internal development file" in error for error in errors))
+            self.commit(root, "README.md", "public", committer=identity)
+            self.assertIn("history: unreviewed author or committer identity", MODULE.audit_history(root))
 
     def test_private_annotated_tag_identity_is_rejected(self):
         folder, root = self.make_repository()

@@ -83,7 +83,61 @@ struct SearchResponse: Codable {
     let error: String?
 }
 struct RequestEcho: Codable { let artist: String?; let title: String? }
-struct Metadata: Codable { let artist: String?; let title: String?; let album: String?; let durationMs: Int? }
+struct ArtworkReference: Codable, Equatable, Sendable {
+    let url: String
+    let provider: String
+    let releaseId: String?
+    let releaseGroupId: String?
+}
+
+struct Metadata: Codable {
+    let artist: String?
+    let title: String?
+    let album: String?
+    let durationMs: Int?
+    let artworkURL: String?
+    let artwork: ArtworkReference?
+
+    init(artist: String?, title: String?, album: String?, durationMs: Int?, artworkURL: String? = nil, artwork: ArtworkReference? = nil) {
+        self.artist = artist
+        self.title = title
+        self.album = album
+        self.durationMs = durationMs
+        self.artworkURL = artworkURL
+        self.artwork = artwork
+    }
+
+    var resolvedArtwork: ArtworkReference? {
+        artwork ?? artworkURL.map { ArtworkReference(url: $0, provider: "metadata", releaseId: nil, releaseGroupId: nil) }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case artist, title, album, durationMs, artwork
+        case artworkURL = "artworkUrl"
+        case artworkURLSnake = "artwork_url"
+        case durationMsSnake = "duration_ms"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        artist = try values.decodeIfPresent(String.self, forKey: .artist)
+        title = try values.decodeIfPresent(String.self, forKey: .title)
+        album = try values.decodeIfPresent(String.self, forKey: .album)
+        durationMs = try values.decodeIfPresent(Int.self, forKey: .durationMs) ?? values.decodeIfPresent(Int.self, forKey: .durationMsSnake)
+        artworkURL = try values.decodeIfPresent(String.self, forKey: .artworkURL) ?? values.decodeIfPresent(String.self, forKey: .artworkURLSnake)
+        artwork = try values.decodeIfPresent(ArtworkReference.self, forKey: .artwork)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(artist, forKey: .artist)
+        try values.encodeIfPresent(title, forKey: .title)
+        try values.encodeIfPresent(album, forKey: .album)
+        try values.encodeIfPresent(durationMs, forKey: .durationMs)
+        try values.encodeIfPresent(artworkURL, forKey: .artworkURL)
+        try values.encodeIfPresent(artwork, forKey: .artwork)
+    }
+}
 struct CandidateResult: Codable, Identifiable {
     var id: String { candidate.provider + ":" + candidate.id }
     let candidate: Candidate

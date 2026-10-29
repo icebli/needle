@@ -33,7 +33,7 @@ extension ReviewQueue {
         item.state = .ready
         let score = bookmark.score ?? Score(confidence: nil, status: "review", positives: ["Exact source retained from bookmark"], warnings: [], rejects: [])
         item.response = SearchResponse(ok: true, request: RequestEcho(artist: item.artist, title: item.title),
-                                       metadata: Metadata(artist: bookmark.artist, title: bookmark.title, album: bookmark.album, durationMs: bookmark.candidate.durationMs),
+                                       metadata: Metadata(artist: bookmark.artist, title: bookmark.title, album: bookmark.album, durationMs: bookmark.candidate.durationMs, artwork: bookmark.artwork),
                                        candidates: [CandidateResult(candidate: bookmark.candidate, score: score)], error: nil)
         item.detail = "Bookmarked source retained. Review the recording before approving."
         items.append(item)

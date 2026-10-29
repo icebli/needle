@@ -178,6 +178,16 @@ private struct BookmarkArtwork: View {
     let bookmark: ReleaseBookmark
 
     var body: some View {
+        Group {
+            if let artwork = bookmark.artwork {
+                AlbumArtworkView(artwork: artwork) { sourceArtwork }
+            } else {
+                sourceArtwork
+            }
+        }
+    }
+
+    private var sourceArtwork: some View {
         AsyncImage(url: bookmark.candidate.thumbnailURL.flatMap(AppModel.mediaURL)) { phase in
             switch phase {
             case .success(let image): image.resizable().scaledToFill()
@@ -190,6 +200,7 @@ private struct BookmarkArtwork: View {
             }
         }
         .accessibilityLabel("Source artwork for \(bookmark.title) by \(bookmark.artist)")
+        .help("Artwork from the source upload. It does not verify the recording.")
     }
 
     private var fallback: some View {
@@ -215,11 +226,7 @@ private struct BookmarkRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            AsyncImage(url: bookmark.candidate.thumbnailURL.flatMap(AppModel.mediaURL)) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Image(systemName: "music.note").foregroundStyle(.secondary)
-            }
+            BookmarkArtwork(bookmark: bookmark)
             .frame(width: 56, height: 56)
             .background(.quaternary)
             .clipShape(RoundedRectangle(cornerRadius: 7))

@@ -9,8 +9,9 @@ struct ReleaseBookmark: Codable, Identifiable {
     let candidate: Candidate
     let score: Score?
     let date: Date
+    let artwork: ArtworkReference?
 
-    init(artist: String, title: String, album: String = "", candidate: Candidate, score: Score? = nil, date: Date = .now) {
+    init(artist: String, title: String, album: String = "", candidate: Candidate, score: Score? = nil, date: Date = .now, artwork: ArtworkReference? = nil) {
         self.id = candidate.provider + ":" + candidate.id
         self.artist = artist
         self.title = title
@@ -18,6 +19,7 @@ struct ReleaseBookmark: Codable, Identifiable {
         self.candidate = candidate
         self.score = score
         self.date = date
+        self.artwork = artwork
     }
 }
 
@@ -36,10 +38,10 @@ final class BookmarkStore {
 
     func contains(candidate: Candidate) -> Bool { items.contains { $0.id == candidate.provider + ":" + candidate.id } }
 
-    func toggle(artist: String, title: String, album: String = "", candidate: Candidate, score: Score? = nil) {
+    func toggle(artist: String, title: String, album: String = "", candidate: Candidate, score: Score? = nil, artwork: ArtworkReference? = nil) {
         let id = candidate.provider + ":" + candidate.id
         if let index = items.firstIndex(where: { $0.id == id }) { items.remove(at: index) }
-        else { items.insert(ReleaseBookmark(artist: artist, title: title, album: album, candidate: candidate, score: score), at: 0) }
+        else { items.insert(ReleaseBookmark(artist: artist, title: title, album: album, candidate: candidate, score: score, artwork: artwork), at: 0) }
         persist()
     }
 
