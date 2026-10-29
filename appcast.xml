@@ -3,6 +3,16 @@
     <channel>
         <title>Needle</title>
         <item>
+            <title>0.8.0</title>
+            <pubDate>Wed, 28 Oct 2026 19:31:37 -0700</pubDate>
+            <sparkle:version>8000</sparkle:version>
+            <sparkle:shortVersionString>0.8.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<h2>Needle 0.8.0</h2><ul><li>The Listening Room adds focused audition controls and an evidence inspector.</li><li>Persistent bookmarks keep recordings available for later review.</li><li>Updated yt-dlp and fixed Swift concurrency and test framework lookup issues.</li></ul><p>This release is unsigned and not notarized.</p>]]></description>
+            <enclosure url="https://github.com/icebli/needle/releases/download/v0.8.0/Needle-0.8.0.dmg" length="107798204" type="application/octet-stream" sparkle:edSignature="1n7Wp/FmIc3hanVeJy+JQ4p1V/N4nmf498d5KPHQKgTfgk1B+dYlxetc7olR+t7yF3tna4mvaUX8mX6LTzZNCg=="/>
+        </item>
+        <item>
             <title>0.7.0</title>
             <pubDate>Tue, 13 Oct 2026 22:03:51 -0700</pubDate>
             <sparkle:version>7000</sparkle:version>
@@ -20,16 +30,6 @@
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
             <description><![CDATA[<h2>Needle 0.5.0</h2><ul><li>Library discovers existing recordings in your Needle folder, including CLI downloads.</li><li>Refresh after adding files outside the app, with no duplicate entries.</li><li>Read embedded tags and artwork while preserving existing files and Spotify status.</li></ul><p>This release is unsigned and not notarized. macOS may require Privacy &amp; Security → Open Anyway.</p>]]></description>
             <enclosure url="https://github.com/icebli/needle/releases/download/v0.5.0/Needle-0.5.0.dmg" length="106549192" type="application/octet-stream" sparkle:edSignature="eEKhmuMRZiBjGlbo+axQXp6w8ex+2BYb+FaNYbIBCaqj4dypgM98b9DEKKDYt1eV/XuuWVEoioxI0PoVvqEEDg=="/>
-        </item>
-        <item>
-            <title>0.4.1</title>
-            <pubDate>Tue, 13 Oct 2026 20:48:28 -0700</pubDate>
-            <sparkle:version>4001</sparkle:version>
-            <sparkle:shortVersionString>0.4.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[<h2>Needle 0.4.1</h2><ul><li>Drop source links onto any tab to add them to Review Queue and find candidates automatically.</li><li>Preview the recording and check detected artist/title before approving the download.</li><li>Drop multiple links together, with duplicate filtering and clear feedback.</li></ul><p>This release is unsigned and not notarized. macOS may require Privacy &amp; Security → Open Anyway.</p>]]></description>
-            <enclosure url="https://github.com/icebli/needle/releases/download/v0.4.1/Needle-0.4.1.dmg" length="107262438" type="application/octet-stream" sparkle:edSignature="FcHYdU/tgs84QzufPSzEOnAliA9BdFPs1bHP0gZO1KjfuoA6SY3lqHlFQOb7RMt4J6DE+aJV7xolm8oqBrJECw=="/>
         </item>
     </channel>
 </rss>
