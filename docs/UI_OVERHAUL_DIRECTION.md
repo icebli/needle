@@ -37,10 +37,10 @@ Keep SwiftUI and AppKit for native behavior, Sparkle for updates, and the Rust r
 
 ## Implementation and verification
 
-The shared ListeningRoomView owns browsing selection independently from the save guard. Source identity includes provider, candidate ID, and URL. Changing the selected source stops playback while the preview service retains comparison timestamps. The bottom audition rail stays available while content scrolls. Wide search panes place source rows beside the evidence inspector; narrow queue panes stack them.
+The shared ListeningRoomView owns browsing selection independently from the save guard. Source identity includes provider, candidate ID, and URL. Changing the selected source stops playback while the preview service retains comparison timestamps. The bottom audition rail stays available while content scrolls. Wide search panes place large source artwork beside the evidence inspector and source rows underneath; narrow queue panes stack the inspector above the source rows.
 
 The inspector shows every supplied positive reason, warning, and rejection, plus actual provider facts. It labels thumbnails as source artwork, treats scores as ranking signals, and disables rejected or invalid sources. Metadata confirmation remains a separate explicit step. Preparation tasks are cancelled when their view disappears; both model paths discard late outcomes for replaced requests.
 
 Visual QA used an isolated app with fixtures to exercise no-artwork states, source switching, exclusion, metadata confirmation, gallery scrolling/filtering, and bookmark reopening. Four new regression tests cover exact bookmark URLs, changed-URL rejection, and stale metadata failures. All 86 desktop tests, 140 Rust tests, strict Clippy/formatting checks, and 15 release tests pass. The canonical installer updates /Applications/Needle.app and its CLI/native-host copies.
 
-The concept artwork remains a directional study. Fingerprint/mastering claims in that study are not implemented. Existing Swift concurrency warnings and the test runner's explicit Sparkle rpath requirement remain tracked separately.
+The concept artwork remains a directional study. Fingerprint/mastering claims in that study are not implemented. Swift concurrency warnings and the test framework lookup issue were fixed for 0.8.0.

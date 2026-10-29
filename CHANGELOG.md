@@ -2,6 +2,14 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.8.1
+
+- Rebuilt the recording workspace around large artwork, compact source rows, and a dedicated right evidence inspector.
+- Review and bookmark actions stay visible while source evidence scrolls.
+- Replaced the permanent queue column with a compact recording picker.
+- Playback uses one continuous bottom strip, including at narrow window widths.
+- Removed promotional copy and added native Liquid Glass to search and playback controls on macOS 26 and later.
+
 ## 0.8.0
 
 - Listening Room brings artwork-led source comparison, a persistent audition rail, and an evidence inspector to search and review.

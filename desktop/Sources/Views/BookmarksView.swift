@@ -15,7 +15,6 @@ struct BookmarksView: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Bookmarks").font(.largeTitle.bold())
-                Text("Your saved sources, ready when you are.").foregroundStyle(.secondary)
             }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) { searchField; collectionOptions }
@@ -130,7 +129,7 @@ private enum BookmarkLayout: String, CaseIterable {
     case list
 }
 
-private struct BookmarkGalleryCard: View {
+struct BookmarkGalleryCard: View {
     let bookmark: ReleaseBookmark
     let review: () -> Void
     let remove: () -> Void

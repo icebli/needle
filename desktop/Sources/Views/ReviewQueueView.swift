@@ -8,17 +8,28 @@ struct ReviewQueueView: View {
     private var queue: ReviewQueue { model.reviewQueue }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Review Queue").font(.largeTitle.bold())
-                    Text("Choose a recording before it is saved.")
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Menu {
+                    Picker("Recording", selection: Binding(get: { queue.selectedID }, set: { queue.selectedID = $0 })) {
+                        ForEach(queue.items) { item in
+                            Text("\(item.title.isEmpty ? item.label : item.title) — \(queueSubtitle(for: item))")
+                                .tag(Optional(item.id))
+                        }
+                    }
+                    Divider()
+                    Button("Clear finished") { queue.removeFinished() }
+                        .disabled(!queue.items.contains { [.saved, .skipped].contains($0.state) })
+                } label: {
+                    Label("Review Queue · \(queue.items.count)", systemImage: "list.bullet")
+                        .font(.callout.weight(.semibold))
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
                 Spacer()
                 if queue.activeDownloads > 0 {
                     ProgressView().controlSize(.small)
-                    Text("\(queue.activeDownloads) downloading").font(.callout)
+                    Text("\(queue.activeDownloads) downloading").font(.caption)
                 }
                 Menu {
                     Toggle("Keep preview position", isOn: $preview.keepTimestampAcrossCandidates)
@@ -27,9 +38,13 @@ struct ReviewQueueView: View {
                     Label("Queue actions", systemImage: "ellipsis.circle")
                 }
                 .menuStyle(.borderlessButton)
+                .fixedSize()
                 Button("Add recordings", systemImage: "plus") { showImport = true }
                     .buttonStyle(.borderedProminent).tint(.orange)
             }
+            .padding(.horizontal, 20)
+            .frame(height: 44)
+            Divider()
             if queue.items.isEmpty {
                 ContentUnavailableView {
                     Label("Bring your missing music", systemImage: "list.bullet.rectangle")
@@ -38,33 +53,15 @@ struct ReviewQueueView: View {
                 } actions: {
                     Button("Add recordings") { showImport = true }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let item = queue.selected {
+                ReviewItemView(item: item, queue: queue, bookmarks: model.bookmarks, preview: preview)
+                    .id(item.id).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                HSplitView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        List(selection: Binding(get: { queue.selectedID }, set: { queue.selectedID = $0 })) {
-                            ForEach(queue.items) { item in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.title.isEmpty ? item.label : item.title)
-                                        .lineLimit(1).font(.callout.weight(.medium))
-                                    Text(queueSubtitle(for: item)).lineLimit(1).font(.caption)
-                                        .foregroundStyle(queueStateColor(item.state))
-                                }.padding(.vertical, 5).tag(item.id)
-                            }
-                        }.listStyle(.inset)
-                        Button("Clear finished") { queue.removeFinished() }
-                            .disabled(!queue.items.contains { [.saved, .skipped].contains($0.state) })
-                    }.frame(minWidth: 190, idealWidth: 220, maxWidth: 240)
-                    if let item = queue.selected {
-                        ReviewItemView(item: item, queue: queue, bookmarks: model.bookmarks, preview: preview)
-                            .id(item.id).frame(minWidth: 430, maxWidth: .infinity)
-                    } else {
-                        ContentUnavailableView("Choose a recording", systemImage: "music.note")
-                            .frame(maxWidth: .infinity)
-                    }
-                }
+                ContentUnavailableView("Choose a recording", systemImage: "music.note")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(24)
         .sheet(isPresented: $showImport) {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Add recordings to review").font(.title2.bold())
@@ -123,21 +120,25 @@ private struct ReviewItemView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(item.label).font(.title2.bold()).textSelection(.enabled)
-                        Text(item.state.label).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+                if item.state != .ready {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.label).font(.title2.bold()).textSelection(.enabled)
+                            Text(item.state.label).font(.callout).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if [.searching, .downloading].contains(item.state) {
+                            Button("Cancel") { queue.cancel(item.id) }
+                        } else if ![.approved, .saved].contains(item.state) {
+                            Button("Skip") { preview.stop(); queue.skip(item.id) }.disabled(preparingMetadata)
+                        }
                     }
-                    Spacer()
-                    if [.searching, .downloading].contains(item.state) {
-                        Button("Cancel") { queue.cancel(item.id) }
-                    } else if ![.approved, .saved].contains(item.state) {
-                        Button("Skip") { preview.stop(); queue.skip(item.id) }.disabled(preparingMetadata)
-                    }
+                    .padding(20)
                 }
                 if let detail = item.detail {
                     Text(detail).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                        .padding(.horizontal, 20).padding(.bottom, 10)
                 }
                 if [.needsInput, .failed, .interrupted, .skipped].contains(item.state) || showEdit {
                     VStack(alignment: .leading, spacing: 10) {
@@ -147,31 +148,29 @@ private struct ReviewItemView: View {
                         Button("Find recordings") {
                             preview.stop(); queue.edit(id: item.id, artist: artist, title: title, source: source); showEdit = false
                         }.disabled(artist.trimmingCharacters(in: .whitespaces).isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }.textFieldStyle(.roundedBorder)
+                    }.textFieldStyle(.roundedBorder).padding(20)
                 }
                 if item.state == .ready, let response = item.response {
-                    HStack {
+                    HStack(spacing: 12) {
                         Toggle("Add to Spotify playlist ‘\(item.settings.playlistName)’", isOn: $spotify)
                             .toggleStyle(.checkbox)
                             .disabled(item.settings.format != "mp3")
                             .help("Needle saves the local file either way. With the companion, it also adds the MP3 to this playlist.")
                         Spacer()
-                        Menu {
-                            Button("Edit request") { showEdit.toggle() }.disabled(preparingMetadata)
-                        } label: {
-                            Label("Review options", systemImage: "ellipsis.circle")
+                        if item.settings.format != "mp3" {
+                            Text("MP3 required").font(.caption2).foregroundStyle(.secondary)
                         }
-                        .menuStyle(.borderlessButton)
-                        .fixedSize()
+                        Button("Edit request") { showEdit.toggle() }.disabled(preparingMetadata)
+                        Button("Skip") { preview.stop(); queue.skip(item.id) }.disabled(preparingMetadata)
                     }
-                    if item.settings.format != "mp3" {
-                        Text("Spotify delivery requires MP3.")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
+                    .font(.caption)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 8)
+                    Divider()
                     ListeningRoomView(candidates: response.candidates, artist: item.artist, title: item.title,
                                       album: response.metadata?.album ?? "", bookmarks: bookmarks, preview: preview,
                                       disabled: preparingMetadata,
-                                      saveLabel: preparingMetadata ? "Preparing metadata…" : "Review metadata", showsHeader: false) { candidate in
+                                      saveLabel: preparingMetadata ? "Preparing metadata…" : "Review metadata") { candidate in
                         preview.stop()
                         preparingMetadata = true
                         metadataTask = Task {
@@ -184,9 +183,10 @@ private struct ReviewItemView: View {
                     }
                 }
                 if item.state == .searching || item.state == .downloading {
-                    ProgressView().controlSize(.small)
+                    ProgressView().controlSize(.small).padding(20)
                 }
-        }.padding(.horizontal, 16).padding(.bottom, 12)
+                if item.state != .ready { Spacer(minLength: 0) }
+        }
         .onDisappear { metadataTask?.cancel(); preparingMetadata = false }
         .onChange(of: item.artist) { artist = item.artist }
         .onChange(of: item.title) { title = item.title }

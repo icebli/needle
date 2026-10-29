@@ -10,7 +10,6 @@ struct ListeningRoomView: View {
     @ObservedObject var preview: AudioPreviewService
     let disabled: Bool
     let saveLabel: String
-    var showsHeader = true
     let save: (CandidateResult) -> Void
 
     @State private var selectedID: String?
@@ -26,41 +25,29 @@ struct ListeningRoomView: View {
 
     var body: some View {
         GeometryReader { geometry in
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                if showsHeader { roomHeader }
-                if candidates.isEmpty {
-                    ContentUnavailableView("No recordings yet", systemImage: "music.note.list", description: Text("Search for a recording to compare sources here."))
-                } else {
-                    if candidates.contains(where: { $0.score.status == "rejected" }) {
-                        Toggle("Show excluded recordings", isOn: $showExcluded)
-                            .toggleStyle(.checkbox)
-                            .font(.callout)
-                    }
-                    if let selected {
-                        if geometry.size.width >= 720 {
-                            HStack(alignment: .top, spacing: 22) {
-                                sourceList.frame(width: max(280, (geometry.size.width - 78) * 0.43))
-                                evidenceInspector(selected).frame(maxWidth: .infinity)
-                            }
-                        } else {
-                            VStack(alignment: .leading, spacing: 16) {
-                                sourceList
-                                evidenceInspector(selected)
-                            }
+            HStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        if let selected {
+                            recordingHeader(selected, width: geometry.size.width - inspectorWidth)
                         }
-                    } else {
-                        ContentUnavailableView("All recordings are excluded", systemImage: "nosign", description: Text("Show excluded recordings to inspect why they were rejected."))
+                        sourceList
                     }
+                    .padding(24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Divider()
+                if let selected {
+                    evidenceInspector(selected)
+                        .frame(width: inspectorWidth)
+                } else {
+                    ContentUnavailableView("No source selected", systemImage: "music.note")
+                        .frame(width: inspectorWidth)
                 }
             }
-            .padding(28)
-            .frame(maxWidth: 1180, alignment: .leading)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            auditionRail
-        }
-        }
+        .frame(minWidth: 740)
+        .safeAreaInset(edge: .bottom, spacing: 0) { auditionRail }
         .onAppear { reconcileSelection() }
         .onChange(of: candidates.map { [$0.id, $0.candidate.url] }) { _, _ in
             preview.stop()
@@ -73,126 +60,130 @@ struct ListeningRoomView: View {
         }
     }
 
-    private var roomHeader: some View {
-        HStack(alignment: .bottom, spacing: 16) {
-            VStack(alignment: .leading, spacing: 5) {
-                Label("Listening Room", systemImage: "waveform.circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.orange)
-                    .textCase(.uppercase)
-                    .tracking(1.2)
+    private let inspectorWidth: CGFloat = 270
+
+    private func recordingHeader(_ result: CandidateResult, width: CGFloat) -> some View {
+        HStack(alignment: .top, spacing: 22) {
+            ListeningRoomArtwork(candidate: result.candidate, size: min(260, max(170, width * 0.38)))
+            VStack(alignment: .leading, spacing: 10) {
                 Text(title.isEmpty ? "Untitled recording" : title)
-                    .font(.system(size: 30, weight: .bold, design: .serif))
-                    .lineLimit(2)
-                Text(album.isEmpty ? artist : "\(artist) · \(album)")
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Text("Choose the source you trust. Needle keeps the evidence visible until you approve it.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .font(.system(size: 28, weight: .semibold, design: .serif))
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+                Text(artist).font(.title3).foregroundStyle(.secondary).lineLimit(2)
+                Divider().padding(.vertical, 4)
+                if !album.isEmpty { headerFact("Album", album) }
+                headerFact("Source", result.candidate.provider.capitalized)
+                headerFact("Duration", duration(result.candidate.durationMs))
+                headerFact("Uploader", result.candidate.uploader ?? "Unknown")
             }
-            Spacer(minLength: 12)
-            if let selected { ListeningRoomArtwork(candidate: selected.candidate, size: 150) }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.bottom, 4)
+    }
+
+    private func headerFact(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.callout).lineLimit(2)
+        }
     }
 
     @ViewBuilder private var auditionRail: some View {
         if let selected {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) {
-                    auditionIdentity(selected).frame(minWidth: 180)
-                    PreviewControlsView(service: preview, candidate: selected, showsPositionOption: true)
-                        .frame(minWidth: 280, maxWidth: 620)
+            HStack(spacing: 20) {
+                HStack(spacing: 10) {
+                    ListeningRoomArtwork(candidate: selected.candidate, size: 40)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(selected.candidate.title).font(.callout.weight(.medium)).lineLimit(1)
+                        Text(artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    auditionIdentity(selected)
-                    PreviewControlsView(service: preview, candidate: selected, showsPositionOption: true)
-                }
+                .frame(width: 200, alignment: .leading)
+                PreviewControlsView(service: preview, candidate: selected, showsPositionOption: true)
+                    .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 9)
-            .background(.bar)
-            .padding(.horizontal, 18)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 22)
+            .frame(height: 70)
+            .needleGlassSurface(cornerRadius: 0)
+            .overlay(alignment: .top) { Divider() }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Audition controls for \(selected.candidate.title)")
         }
     }
 
-    private func auditionIdentity(_ result: CandidateResult) -> some View {
-        HStack(spacing: 10) {
-            ListeningRoomArtwork(candidate: result.candidate, size: 36)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(preview.isPlaying ? "Now auditioning" : "Audition")
-                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Text(result.candidate.title).font(.callout.weight(.medium)).lineLimit(2)
-            }
-            Spacer(minLength: 0)
-        }
-    }
-
     private var sourceList: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Sources").font(.headline)
+                Text("Matching recordings").font(.headline)
+                Text("\(visibleCandidates.count)").font(.callout.monospacedDigit()).foregroundStyle(.secondary)
                 Spacer()
-                Text("\(visibleCandidates.count) to compare").font(.caption).foregroundStyle(.secondary)
+                if candidates.contains(where: { $0.score.status == "rejected" }) {
+                    Toggle("Show excluded", isOn: $showExcluded).toggleStyle(.checkbox).font(.caption)
+                }
             }
-            VStack(spacing: 7) {
-                ForEach(visibleCandidates) { result in
-                    ListeningRoomSourceRow(result: result, selected: result.id == selectedID) {
-                        selectedID = result.id
-                    }.disabled(disabled)
+            .padding(.bottom, 6)
+            if visibleCandidates.isEmpty {
+                ContentUnavailableView("No matching recordings", systemImage: "music.note.list",
+                                       description: Text(showExcluded ? "No sources were returned." : "Show excluded sources to inspect their evidence."))
+            } else {
+                LazyVStack(spacing: 2) {
+                    ForEach(visibleCandidates) { result in
+                        ListeningRoomSourceRow(result: result, selected: result.id == selected?.id) {
+                            selectedID = result.id
+                        }.disabled(disabled)
+                    }
                 }
             }
         }
     }
 
     private func evidenceInspector(_ result: CandidateResult) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                ListeningRoomArtwork(candidate: result.candidate, size: 68)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Evidence inspector").font(.caption.weight(.semibold)).foregroundStyle(.orange)
-                    Text(result.candidate.title).font(.headline).lineLimit(2)
-                    Text(result.candidate.uploader ?? result.candidate.provider)
-                        .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("Source inspector").font(.headline)
+                    ListeningRoomArtwork(candidate: result.candidate, size: 222)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(result.candidate.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+                        Text(result.candidate.uploader ?? result.candidate.provider)
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                    statusBanner(result)
+                    CandidateMetadataView(candidate: result.candidate)
+                        .id(result.id + result.candidate.url)
+                    Divider()
+                    evidenceFacts(result)
+                    Divider()
+                    reasonSection(result)
+                    if let url = AppModel.mediaURL(result.candidate.url) {
+                        Button("Open source", systemImage: "arrow.up.right") { NSWorkspace.shared.open(url) }
+                            .buttonStyle(.borderless)
+                    }
                 }
-                Spacer(minLength: 0)
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            statusBanner(result)
-            CandidateMetadataView(candidate: result.candidate)
-                .id(result.id + result.candidate.url)
-            evidenceFacts(result)
-            reasonSection(result)
-            HStack(spacing: 10) {
+            Divider()
+            VStack(spacing: 10) {
+                Button { save(result) } label: {
+                    Text(saveLabel).frame(maxWidth: .infinity)
+                }
+                .needlePrimaryAction().tint(.orange).controlSize(.large)
+                .disabled(disabled || result.score.status == "rejected" || AppModel.mediaURL(result.candidate.url) == nil)
+                .help(result.score.status == "rejected" ? "Excluded sources cannot be approved." : "Review metadata before saving this source.")
                 Button {
                     bookmarks.toggle(artist: artist, title: title, album: album,
                                      candidate: result.candidate, score: result.score)
                 } label: {
-                    Label(bookmarks.contains(candidate: result.candidate) ? "Bookmarked" : "Bookmark",
+                    Label(bookmarks.contains(candidate: result.candidate) ? "Bookmarked" : "Save to bookmarks",
                           systemImage: bookmarks.contains(candidate: result.candidate) ? "bookmark.fill" : "bookmark")
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderless)
-                if let url = AppModel.mediaURL(result.candidate.url) {
-                    Button("Open source") { NSWorkspace.shared.open(url) }.buttonStyle(.borderless)
-                }
+                .buttonStyle(.bordered).controlSize(.large)
             }
-            Button(saveLabel) { save(result) }
-                .buttonStyle(.borderedProminent)
-                .tint(.orange)
-                .frame(maxWidth: .infinity)
-                .disabled(disabled || result.score.status == "rejected" || AppModel.mediaURL(result.candidate.url) == nil)
-                .help(result.score.status == "rejected" ? "Excluded sources cannot be approved." : "Review metadata before saving this source.")
+            .padding(18)
         }
-        .padding(18)
-        .background(inspectorBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.quaternary)
-        }
+        .background(.regularMaterial)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Evidence inspector for \(result.candidate.title)")
         .id([result.id, result.candidate.url])
@@ -219,7 +210,7 @@ struct ListeningRoomView: View {
             fact("Codec", result.candidate.audioCodec ?? "Not reported")
             fact("Bitrate", result.candidate.audioBitrateKbps.map { "\($0) kbps" } ?? "Not reported")
             fact("Score", result.score.confidence.map { "\(Int($0)) · ranking signal only" } ?? "Unavailable · ranking signal only")
-        }
+        }.font(.caption)
     }
 
     private func reasonSection(_ result: CandidateResult) -> some View {
@@ -242,14 +233,10 @@ struct ListeningRoomView: View {
         .font(.caption)
     }
 
-    private var inspectorBackground: some ShapeStyle {
-        AnyShapeStyle(Color(nsColor: .underPageBackgroundColor).opacity(0.92))
-    }
-
     private func fact(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(label).foregroundStyle(.secondary).frame(width: 84, alignment: .leading)
-            Text(value).lineLimit(2).textSelection(.enabled)
+            Text(label).foregroundStyle(.secondary).frame(width: 62, alignment: .leading)
+            Text(value).lineLimit(3).textSelection(.enabled)
         }
     }
 
@@ -280,21 +267,24 @@ private struct ListeningRoomSourceRow: View {
     var body: some View {
         Button(action: select) {
             HStack(spacing: 10) {
-                ListeningRoomArtwork(candidate: result.candidate, size: 48)
+                ListeningRoomArtwork(candidate: result.candidate, size: 36)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(result.candidate.title).font(.callout.weight(.medium)).lineLimit(2)
+                    Text(result.candidate.title).font(.callout.weight(.medium)).lineLimit(1)
                     HStack(spacing: 5) {
                         Text(result.candidate.provider.capitalized)
                         Text("·")
-                        Text(duration).monospacedDigit()
+                        Text(result.candidate.uploader ?? "Unknown uploader").lineLimit(1)
                         if result.candidate.channelIsVerified == true { Image(systemName: "checkmark.seal.fill") }
                     }
                     .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 4)
+                Text(duration).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .frame(width: 38, alignment: .trailing)
                 Label(result.score.status == "rejected" ? "Excluded" : result.score.status.capitalized,
                       systemImage: result.score.status == "rejected" ? "nosign" : "circle.fill")
-                    .font(.caption.weight(.semibold))
+                    .font(.caption2.weight(.medium))
+                    .frame(width: 82, alignment: .leading)
                     .foregroundStyle(result.score.status == "recommended" ? .green : .secondary)
             }
             .padding(9)

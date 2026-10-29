@@ -22,7 +22,7 @@ struct AddMusicView: View {
         VStack(spacing: 0) {
             if model.searchResults.isEmpty || showComposer {
                 searchComposer
-            } else {
+            } else if !model.searchResults.isEmpty {
                 HStack {
                     Label("Listening Room", systemImage: "waveform.circle").font(.headline)
                     Spacer()
@@ -33,7 +33,7 @@ struct AddMusicView: View {
                         .disabled(preparingMetadata)
                 }.padding(.horizontal, 24).padding(.vertical, 14)
             }
-            Divider()
+            if !model.searchResults.isEmpty || model.isSearching { Divider() }
             if !model.searchResults.isEmpty {
                 ListeningRoomView(candidates: model.searchResults,
                                   artist: model.requestSnapshot?.artist ?? artist,
@@ -53,7 +53,13 @@ struct AddMusicView: View {
                         .disabled(model.isCancelling)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ListeningRoomWelcome(model: model)
+                ScrollView {
+                    ListeningRoomWelcome(model: model)
+                        .frame(maxWidth: 900)
+                        .padding(.horizontal, 36)
+                        .padding(.bottom, 36)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
             }
         }
         .onChange(of: artist) { resetSearch() }
@@ -77,7 +83,7 @@ struct AddMusicView: View {
     private var searchComposer: some View {
         VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Find a recording").font(.title2.weight(.semibold))
+                    Text("Find a recording").font(.system(size: model.searchResults.isEmpty ? 32 : 22, weight: .semibold, design: .serif))
                     Spacer()
                     Button("Open review queue", systemImage: "list.bullet.rectangle") { model.destination = .reviewQueue }
                         .buttonStyle(.borderless)
@@ -88,7 +94,7 @@ struct AddMusicView: View {
                     Button(action: search) {
                         Label(model.isSearching ? "Searching…" : "Find recordings", systemImage: "magnifyingglass")
                     }
-                    .buttonStyle(.borderedProminent).tint(.orange).controlSize(.large)
+                    .needlePrimaryAction().tint(.orange).controlSize(.large)
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(model.isSearching || model.isCheckingTools || artist.trimmingCharacters(in: .whitespaces).isEmpty || title.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
@@ -109,6 +115,10 @@ struct AddMusicView: View {
                 }
             }
             .padding(24)
+            .needleGlassSurface(cornerRadius: 24)
+            .frame(maxWidth: 900)
+            .padding(model.searchResults.isEmpty && !model.isSearching ? 36 : 16)
+            .frame(maxWidth: .infinity)
             .disabled(preparingMetadata)
     }
 
@@ -147,7 +157,7 @@ struct AddMusicView: View {
     private func field(_ label: String, placeholder: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-            TextField(placeholder, text: text).textFieldStyle(.roundedBorder).disabled(model.isSearching)
+            TextField(placeholder, text: text).textFieldStyle(.roundedBorder).controlSize(.large).disabled(model.isSearching)
                 .onSubmit { search() }
         }
     }

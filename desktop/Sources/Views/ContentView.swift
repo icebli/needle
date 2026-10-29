@@ -96,13 +96,12 @@ struct ContentView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 6) {
-                Image(systemName: "link")
-                Text(dropFeedback ?? "Drop links anywhere to add them to Review Queue")
+            if let dropFeedback {
+                Label(dropFeedback, systemImage: "link")
+                    .font(.caption)
+                    .foregroundStyle(Color.accentColor)
+                    .padding(.vertical, 5)
             }
-            .font(.caption)
-            .foregroundStyle(dropFeedback == nil ? .secondary : Color.accentColor)
-            .padding(.vertical, 5)
         }
         .task { if model.tools == nil { model.checkTools() } }
     }
