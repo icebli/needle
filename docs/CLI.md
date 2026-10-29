@@ -85,6 +85,18 @@ The Firefox / Zen extension turns the selected page or link into an immutable di
 
 The optional Spicetify companion adds indexed local files to the named Spotify playlist. Ordinary Spotify Local Files playback remains available without the companion.
 
+## Browser sign-in
+
+Needle can reuse a signed-in browser session when a source requires authentication. In the desktop app, open Settings, enable Browser sign-in, and select the browser where you signed into the source site. Zen uses its default profile; an optional profile field selects another profile.
+
+For CLI use, set the browser selector for that invocation:
+
+```bash
+NEEDLE_COOKIES_FROM_BROWSER=firefox needle search "Kendrick Lamar" "Look Out for Detox" --json
+```
+
+Selectors use yt-dlp’s `BROWSER[:PROFILE]` syntax. Needle passes the setting to source lookup, discovery, and downloads. Cookies remain in the browser; Needle does not export them to a cookie file. Clear the desktop setting or omit the environment variable to use anonymous requests.
+
 ## Inspect and repair existing files
 
 ```bash

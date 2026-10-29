@@ -40,6 +40,7 @@ struct AddMusicView: View {
                                   title: model.requestSnapshot?.title ?? title,
                                   album: model.requestSnapshot?.album ?? album,
                                   artwork: model.metadata?.resolvedArtwork,
+                                  settings: model.requestSnapshot?.settings ?? model.settings.value,
                                   bookmarks: model.bookmarks, preview: preview,
                                   disabled: model.isSearching || model.isCheckingTools || preparingMetadata,
                                   saveLabel: preparingMetadata ? "Preparing metadata…" : "Review metadata",

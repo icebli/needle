@@ -7,6 +7,7 @@ struct ListeningRoomView: View {
     let title: String
     let album: String
     var artwork: ArtworkReference? = nil
+    var settings = NeedleSettings()
     let bookmarks: BookmarkStore
     @ObservedObject var preview: AudioPreviewService
     let disabled: Bool
@@ -110,7 +111,7 @@ struct ListeningRoomView: View {
                     }
                 }
                 .frame(width: 200, alignment: .leading)
-                PreviewControlsView(service: preview, candidate: selected, showsPositionOption: true)
+                PreviewControlsView(service: preview, candidate: selected, showsPositionOption: true, settings: settings)
                     .frame(maxWidth: .infinity)
             }
             .padding(.horizontal, 22)

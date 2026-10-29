@@ -4,6 +4,7 @@ struct PreviewControlsView: View {
     @ObservedObject var service: AudioPreviewService
     let candidate: CandidateResult
     var showsPositionOption = true
+    var settings = NeedleSettings()
 
     private var isCurrent: Bool { service.candidateID == candidate.id }
     private var isPlayable: Bool {
@@ -22,7 +23,7 @@ struct PreviewControlsView: View {
                     .help("Preparing the selected recording for preview")
                     .accessibilityLabel("Preparing preview")
             } else if isCurrent, case .failed(let message) = service.state {
-                Button { service.retry(candidate: candidate) } label: {
+                Button { service.start(candidate: candidate, settings: settings) } label: {
                     Image(systemName: "arrow.clockwise")
                         .frame(width: 32, height: 32)
                 }
@@ -32,7 +33,7 @@ struct PreviewControlsView: View {
                 .help("Preview failed: \(message)\nRetry the selected recording.")
             } else {
                 Button {
-                    if isCurrent { service.togglePlayback() } else { service.start(candidate: candidate) }
+                    if isCurrent { service.togglePlayback() } else { service.start(candidate: candidate, settings: settings) }
                 } label: {
                     Image(systemName: isCurrent && service.isPlaying ? "pause.fill" : "play.fill")
                         .frame(width: 32, height: 32)

@@ -2,11 +2,12 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::Read;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use needle_core::search::{Candidate, SearchSource};
+use needle_core::toolchain::{yt_dlp_command, yt_dlp_error_message};
 
 const RESULTS_PER_QUERY: usize = 15;
 const QUERY_TIMEOUT: Duration = Duration::from_secs(20);
@@ -112,7 +113,7 @@ fn search_provider(
         needle_core::search::SearchProvider::Youtube => ("ytsearch", "youtube"),
         needle_core::search::SearchProvider::Soundcloud => ("scsearch", "soundcloud"),
     };
-    let mut child = Command::new(yt_dlp)
+    let mut child = yt_dlp_command(yt_dlp)
         .args([
             &format!("{prefix}{RESULTS_PER_QUERY}:{query}"),
             "--flat-playlist",
@@ -145,15 +146,10 @@ fn search_provider(
                 .join()
                 .map_err(|_| anyhow::anyhow!("yt-dlp stderr reader panicked"))??;
             if !status.success() {
-                let detail = String::from_utf8_lossy(&error).trim().to_owned();
                 bail!(
-                    "yt-dlp exited with {}{}",
+                    "yt-dlp exited with {}: {}",
                     status,
-                    if detail.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {detail}")
-                    }
+                    yt_dlp_error_message(&error)
                 );
             }
             return parse_entries(&String::from_utf8_lossy(&output), label, query);

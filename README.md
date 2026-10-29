@@ -8,7 +8,7 @@ Needle helps you find the exact recording you want, review the available sources
 
 ## Download the Mac app
 
-Download **[Needle 0.9.0](https://github.com/icebli/needle/releases/tag/v0.9.0)** for **Apple Silicon Macs (M1 or newer), macOS 15 Sequoia or later**. Open the `.dmg` and drag Needle to Applications. Follow [Getting started](docs/GETTING_STARTED.md) for your first recording and Spotify setup.
+Download **[Needle 0.9.1](https://github.com/icebli/needle/releases/tag/v0.9.1)** for **Apple Silicon Macs (M1 or newer), macOS 15 Sequoia or later**. Open the `.dmg` and drag Needle to Applications. Follow [Getting started](docs/GETTING_STARTED.md) for your first recording and Spotify setup.
 
 The app is unsigned. On first launch, macOS may require **System Settings → Privacy & Security → Open Anyway**. The installer includes its audio tools; you do not need Rust, Python, Xcode, or Homebrew.
 

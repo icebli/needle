@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::debug;
 
+use crate::toolchain::{yt_dlp_command, yt_dlp_error_message};
+
 /// Immutable plan after candidate selection
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadPlan {
@@ -17,6 +19,10 @@ pub struct DownloadPlan {
 
 /// Download audio from a candidate URL using yt-dlp
 pub fn download_audio(yt_dlp_path: &str, plan: &DownloadPlan) -> Result<PathBuf> {
+    download_with_command(yt_dlp_command(yt_dlp_path), plan)
+}
+
+fn download_with_command(mut cmd: Command, plan: &DownloadPlan) -> Result<PathBuf> {
     let tmp_dir = &plan.output_dir;
     std::fs::create_dir_all(tmp_dir)?;
 
@@ -25,7 +31,7 @@ pub fn download_audio(yt_dlp_path: &str, plan: &DownloadPlan) -> Result<PathBuf>
 
     debug!("yt-dlp download: {} -> {}", plan.url, output_str);
 
-    let mut cmd = Command::new(yt_dlp_path);
+    let browser_session = cmd.get_args().any(|arg| arg == "--cookies-from-browser");
     cmd.args([
         &plan.url,
         "--extract-audio",
@@ -35,24 +41,26 @@ pub fn download_audio(yt_dlp_path: &str, plan: &DownloadPlan) -> Result<PathBuf>
         "0",
         "--embed-thumbnail",
         "--no-playlist",
-        // YouTube's default web client can return signed media URLs that 403
-        // for yt-dlp's follow-up request. Android exposes a compatible
-        // client path without changing the selected recording.
-        "--extractor-args",
-        "youtube:player_client=android",
         "--no-warnings",
         "--quiet",
         "--output",
         &output_str,
     ]);
+    if !browser_session {
+        // Android avoids anonymous web-client media URLs that return 403.
+        // With browser cookies, yt-dlp must choose a compatible signed-in client.
+        cmd.args(["--extractor-args", "youtube:player_client=android"]);
+    }
 
     // Fixup fixes timestamp/stream issues common on SoundCloud streams
     cmd.arg("--fixup").arg("force");
 
     let output = cmd.output()?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("yt-dlp download failed: {}", stderr);
+        bail!(
+            "yt-dlp download failed: {}",
+            yt_dlp_error_message(&output.stderr)
+        );
     }
 
     // yt-dlp writes e.g. source.webm or source.m4a; find what it produced
@@ -170,11 +178,20 @@ mod tests {
             target_format: "best".into(),
             output_dir: root.clone(),
         };
-        let downloaded = download_audio(script.to_str().unwrap(), &plan).unwrap();
+        let downloaded = download_with_command(Command::new(&script), &plan).unwrap();
         let args = std::fs::read_to_string(args_file).unwrap();
 
         assert_eq!(downloaded, root.join("source.webm"));
         assert!(args.contains("--extractor-args\nyoutube:player_client=android\n"));
+
+        let selector = "firefox:/Browser Profile With Spaces";
+        let mut command = Command::new(&script);
+        command.args(["--cookies-from-browser", selector]);
+        let downloaded = download_with_command(command, &plan).unwrap();
+        let args = std::fs::read_to_string(root.join("args")).unwrap();
+        assert_eq!(downloaded, root.join("source.webm"));
+        assert!(args.contains(&format!("--cookies-from-browser\n{selector}\n")));
+        assert!(!args.contains("--extractor-args"));
 
         let _ = std::fs::remove_dir_all(root);
     }

@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Command;
 
+mod yt_dlp;
+pub use yt_dlp::{yt_dlp_command, yt_dlp_error_message};
+
 /// Discovered external tool paths
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Toolchain {

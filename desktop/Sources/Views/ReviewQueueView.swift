@@ -169,7 +169,7 @@ private struct ReviewItemView: View {
                     Divider()
                     ListeningRoomView(candidates: response.candidates, artist: item.artist, title: item.title,
                                       album: response.metadata?.album ?? "", artwork: response.metadata?.resolvedArtwork,
-                                      bookmarks: bookmarks, preview: preview,
+                                      settings: item.settings, bookmarks: bookmarks, preview: preview,
                                       disabled: preparingMetadata,
                                       saveLabel: preparingMetadata ? "Preparing metadata…" : "Review metadata") { candidate in
                         preview.stop()

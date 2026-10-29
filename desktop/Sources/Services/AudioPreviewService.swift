@@ -51,7 +51,7 @@ final class AudioPreviewService: NSObject, ObservableObject {
     var isPreparing: Bool { state == .preparing }
     var isPlaying: Bool { state == .playing }
 
-    func start(candidate: CandidateResult) {
+    func start(candidate: CandidateResult, settings: NeedleSettings = NeedleSettings()) {
         rememberPosition()
         let requestedPosition: Double?
         if keepTimestampAcrossCandidates, let sharedTimestamp {
@@ -79,7 +79,7 @@ final class AudioPreviewService: NSObject, ObservableObject {
                 if self.generation == token { self.preparationTask = nil }
             }
             do {
-                let output = try await self.prepare(source: source, token: token)
+                let output = try await self.prepare(source: source, token: token, settings: settings)
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
                 self.installPlayer(output, token: token)
@@ -156,12 +156,13 @@ final class AudioPreviewService: NSObject, ObservableObject {
     }
 
     nonisolated static func previewArguments(sourceURL: String, outputTemplate: String) -> [String] {
-        ["--ignore-config", "--no-playlist", "--extractor-args", "youtube:player_client=android", "-f",
+        ["--ignore-config", "--no-playlist", "-f",
          "bestaudio[ext=m4a]/bestaudio", "-x", "--audio-format", "mp3",
          "--audio-quality", "5", "-o", outputTemplate, sourceURL]
     }
 
-    private func prepare(source: URL, token: UUID) async throws -> URL {
+    private func prepare(source: URL, token: UUID, settings: NeedleSettings) async throws -> URL {
+        let browserArguments = try BrowserSession.arguments(settings: settings)
         let cacheDirectory = Self.previewCacheDirectory(for: candidateID ?? token.uuidString,
                                                         sourceURL: source.absoluteString)
         let directory = FileManager.default.temporaryDirectory
@@ -184,7 +185,7 @@ final class AudioPreviewService: NSObject, ObservableObject {
         let output = directory.appendingPathComponent("excerpt.mp3")
         let executable = try ytDLPOverride ?? Self.findExecutable(named: "yt-dlp")
         let result = try await run(executable: executable,
-                                   arguments: Self.previewArguments(sourceURL: source.absoluteString, outputTemplate: template),
+                                   arguments: browserArguments + Self.previewArguments(sourceURL: source.absoluteString, outputTemplate: template),
                                    token: token)
         if result.status == 0, FileManager.default.fileExists(atPath: output.path) {
             guard generation == token else { throw CancellationError() }
@@ -202,13 +203,11 @@ final class AudioPreviewService: NSObject, ObservableObject {
         // loop, and it remains inside this preview's temporary directory.
         let sourceTemplate = directory.appendingPathComponent("source.%(ext)s").path
         let sourceResult = try await run(executable: executable,
-                                         arguments: ["--ignore-config", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
+                                         arguments: browserArguments + ["--ignore-config", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
                                                      "-o", sourceTemplate, source.absoluteString], token: token)
         guard sourceResult.status == 0,
               let downloaded = Self.firstOutput(in: directory, prefix: "source.") else {
-            let detail = String(decoding: sourceResult.error.isEmpty ? result.error : sourceResult.error,
-                                as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            throw PreviewError.message(detail.isEmpty ? "Needle could not prepare this preview." : detail)
+            throw PreviewError.message("Needle could not prepare this preview. Check your internet connection and that the source is still available. If sign-in is required, sign in to YouTube in your selected browser and check Needle’s Browser sign-in settings.")
         }
         let ffmpeg = try Self.findExecutable(named: "ffmpeg")
         let trimResult = try await run(executable: ffmpeg,
@@ -290,6 +289,7 @@ final class AudioPreviewService: NSObject, ObservableObject {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: BrowserSession.environmentKey)
         let bundledTools = Bundle.main.resourceURL?.appendingPathComponent("bin").path
         environment["PATH"] = [bundledTools, "/opt/homebrew/bin", "/usr/local/bin", environment["PATH"]].compactMap { $0 }.joined(separator: ":")
         process.environment = environment

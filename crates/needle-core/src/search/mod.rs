@@ -1,7 +1,8 @@
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 use tracing::debug;
+
+use crate::toolchain::{yt_dlp_command, yt_dlp_error_message};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -196,16 +197,24 @@ pub fn search_sources(
 ) -> Result<Vec<Candidate>> {
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut seen_ids = std::collections::HashSet::new();
+    let mut failures = Vec::new();
+    let mut provider_succeeded = false;
 
     for provider in source.providers() {
-        search_provider(
+        match search_provider(
             yt_dlp_path,
             queries,
             max_per_query,
             *provider,
             &mut seen_ids,
             &mut candidates,
-        )?;
+        ) {
+            Ok(()) => provider_succeeded = true,
+            Err(error) => failures.push(error.to_string()),
+        }
+    }
+    if !provider_succeeded && !failures.is_empty() {
+        bail!("media search failed: {}", failures.join("; "));
     }
 
     Ok(candidates)
@@ -219,11 +228,13 @@ fn search_provider(
     seen_ids: &mut std::collections::HashSet<String>,
     candidates: &mut Vec<Candidate>,
 ) -> Result<()> {
+    let mut query_succeeded = false;
+    let mut last_failure = None;
     for sq in queries {
         let search_arg = format!("{}{max_per_query}:{}", provider.search_prefix(), sq.query);
         debug!("yt-dlp search: {search_arg}");
 
-        let output = Command::new(yt_dlp_path)
+        let output = yt_dlp_command(yt_dlp_path)
             .args([
                 &search_arg,
                 "--flat-playlist",
@@ -231,13 +242,26 @@ fn search_provider(
                 "--no-warnings",
                 "--quiet",
             ])
-            .output()?;
+            .output();
+
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => {
+                last_failure = Some(format!(
+                    "could not start yt-dlp for {}: {error}",
+                    provider.label()
+                ));
+                continue;
+            }
+        };
 
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!("yt-dlp search failed: {stderr}");
+            let message = yt_dlp_error_message(&output.stderr);
+            tracing::warn!("{} search failed: {message}", provider.label());
+            last_failure = Some(format!("{}: {message}", provider.label()));
             continue;
         }
+        query_succeeded = true;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
@@ -280,6 +304,11 @@ fn search_provider(
         }
     }
 
+    if !query_succeeded {
+        if let Some(failure) = last_failure {
+            bail!("{failure}");
+        }
+    }
     Ok(())
 }
 
@@ -347,7 +376,7 @@ pub fn resolve_url(yt_dlp_path: &str, url: &str) -> Result<Option<Candidate>> {
     if !is_supported_direct_url(url) {
         bail!("direct URL must be an HTTP(S) media page");
     }
-    let output = Command::new(yt_dlp_path)
+    let output = yt_dlp_command(yt_dlp_path)
         .args([
             url,
             "--dump-json",
@@ -361,7 +390,10 @@ pub fn resolve_url(yt_dlp_path: &str, url: &str) -> Result<Option<Candidate>> {
         .output()?;
 
     if !output.status.success() {
-        return Ok(None);
+        bail!(
+            "could not resolve this recording: {}",
+            yt_dlp_error_message(&output.stderr)
+        );
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -415,6 +447,80 @@ mod tests {
     fn rejects_non_http_direct_urls_before_launching_yt_dlp() {
         let error = resolve_url("false", "file:///tmp/secret.mp3").unwrap_err();
         assert!(error.to_string().contains("HTTP(S)"));
+    }
+
+    #[cfg(unix)]
+    fn fake_yt_dlp(name: &str, script: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path =
+            std::env::temp_dir().join(format!("needle-search-{name}-{}", std::process::id()));
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn direct_url_auth_failure_is_actionable_without_provider_secrets() {
+        let path = fake_yt_dlp(
+            "auth",
+            "printf '%s\\n' 'ERROR: [youtube] Sign in to confirm you are not a bot. secret-cookie=value /private/browser/profile' >&2\nexit 1",
+        );
+        let error = resolve_url(
+            path.to_str().unwrap(),
+            "https://www.youtube.com/watch?v=exact",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("signed-in browser session"));
+        assert!(error.contains("Needle Settings"));
+        assert!(!error.contains("secret-cookie"));
+        assert!(!error.contains("/private/browser"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn search_errors_when_every_provider_fails() {
+        let path = fake_yt_dlp(
+            "all-failed",
+            "printf '%s\\n' 'ERROR: Sign in to confirm you are not a bot' >&2\nexit 1",
+        );
+        let queries = build_queries("Artist", "Song", None);
+        let error = search_sources(path.to_str().unwrap(), &queries, 2, SearchSource::Auto)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("youtube:"));
+        assert!(error.contains("soundcloud:"));
+        assert!(error.contains("signed-in browser session"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn search_keeps_other_provider_results_after_auth_failure() {
+        let path = fake_yt_dlp(
+            "partial",
+            r#"for arg in "$@"; do
+  case "$arg" in
+    ytsearch*) printf '%s\n' 'ERROR: Sign in to confirm you are not a bot' >&2; exit 1 ;;
+    scsearch*) printf '%s\n' '{"id":"kept","title":"Artist - Song","webpage_url":"https://soundcloud.com/artist/song"}'; exit 0 ;;
+  esac
+done
+exit 2"#,
+        );
+        let candidates = search_sources(
+            path.to_str().unwrap(),
+            &build_queries("Artist", "Song", None),
+            2,
+            SearchSource::Auto,
+        )
+        .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].provider, "soundcloud");
+        assert_eq!(candidates[0].url, "https://soundcloud.com/artist/song");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

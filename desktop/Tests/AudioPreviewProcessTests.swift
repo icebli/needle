@@ -4,6 +4,41 @@ import Darwin
 
 @MainActor
 final class AudioPreviewProcessTests: XCTestCase {
+    func testBrowserSessionReachesPrimaryAndFallbackPreview() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = directory.appendingPathComponent("yt-dlp")
+        try #"""
+#!/bin/sh
+printf '%s\n' "$@" >> "$0.args"
+printf 'END\n' >> "$0.args"
+printf 'cookie database /tmp/private-profile/cookies.sqlite secret-fixture-marker' >&2
+printf 'keychain secret-fixture-marker'
+exit 1
+"""#.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let service = AudioPreviewService(ytDLPPath: script.path)
+        var settings = NeedleSettings()
+        settings.browserSession = .firefox
+        settings.browserProfile = "/tmp/Profile with spaces"
+        service.start(candidate: makeCandidate(url: "https://example.com/\(UUID().uuidString)"), settings: settings)
+        try await waitUntil { if case .failed = service.state { return true }; return false }
+        let attempts = try String(contentsOf: script.appendingPathExtension("args"), encoding: .utf8).components(separatedBy: "END\n").filter { !$0.isEmpty }
+        XCTAssertEqual(attempts.count, 2)
+        guard case .failed(let message) = service.state else { return XCTFail("Expected failed preview") }
+        XCTAssertTrue(message.contains("Browser sign-in settings"))
+        XCTAssertFalse(message.contains("private-profile"))
+        XCTAssertFalse(message.contains("cookies.sqlite"))
+        XCTAssertFalse(message.contains("secret-fixture-marker"))
+        XCTAssertFalse(message.contains("keychain"))
+        for attempt in attempts {
+            XCTAssertTrue(attempt.hasPrefix("--cookies-from-browser\nfirefox:/tmp/Profile with spaces\n"))
+            XCTAssertFalse(attempt.contains("player_client=android"))
+        }
+        service.stop()
+    }
+
     func testPreviewDrainsLargeStderrAndBecomesPlayable() async throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

@@ -109,7 +109,7 @@ final class NeedleDesktopTests: XCTestCase {
     }
     func testPreviewUsesExactSourceAndDownloadsFullTrack() {
         let args = AudioPreviewService.previewArguments(sourceURL: "https://example.com/watch?v=abc", outputTemplate: "/tmp/excerpt.%(ext)s")
-        XCTAssertEqual(args, ["--ignore-config", "--no-playlist", "--extractor-args", "youtube:player_client=android", "-f", "bestaudio[ext=m4a]/bestaudio", "-x", "--audio-format", "mp3", "--audio-quality", "5", "-o", "/tmp/excerpt.%(ext)s", "https://example.com/watch?v=abc"])
+        XCTAssertEqual(args, ["--ignore-config", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio", "-x", "--audio-format", "mp3", "--audio-quality", "5", "-o", "/tmp/excerpt.%(ext)s", "https://example.com/watch?v=abc"])
         XCTAssertEqual(args.last, "https://example.com/watch?v=abc")
     }
     func testHistoryUpsertKeepsLatestTrackOnce() {

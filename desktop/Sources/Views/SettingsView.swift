@@ -14,6 +14,21 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 SetupView(model: model)
             }
+            Section("Browser sign-in") {
+                Picker("Browser session", selection: binding(\.browserSession)) {
+                    Text("None (anonymous)").tag(Optional<BrowserSessionBrowser>.none)
+                    ForEach(BrowserSessionBrowser.allCases) { browser in
+                        Text(browser.label).tag(Optional(browser))
+                    }
+                }
+                if model.settings.value.browserSession != nil {
+                    TextField("Profile (optional)", text: Binding(
+                        get: { model.settings.value.browserProfile ?? "" },
+                        set: { model.settings.value.browserProfile = $0 }))
+                    Text("Sign in to YouTube in this browser first. Needle lets yt-dlp use that browser’s cookies for searches, previews, and saves. Only your browser and profile choice are saved. Leave the profile blank to use the browser default.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Advanced workflow") {
                 Picker("Search sources", selection: binding(\.provider)) {
                     Text("YouTube & SoundCloud").tag("auto")

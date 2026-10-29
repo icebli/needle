@@ -2,6 +2,13 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.9.1
+
+- Use a selected browser session for source lookup, previews, discovery, and downloads, including Zen profiles.
+- Preserve existing settings and review history when adding browser-session preferences.
+- Show actionable provider errors when a selected source cannot be resolved.
+- Use cookie-compatible YouTube clients for authenticated downloads.
+
 ## 0.9.0
 
 - Fetch album covers from Cover Art Archive for the selected MusicBrainz release, with release-group fallback and retained provenance.

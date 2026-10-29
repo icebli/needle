@@ -258,7 +258,7 @@ actor NeedleCLIService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
-        var env = ProcessInfo.processInfo.environment
+        var env = try BrowserSession.environment(settings: settings, inherited: ProcessInfo.processInfo.environment)
         let bundledTools = Bundle.main.resourceURL?.appendingPathComponent("bin").path
         env["PATH"] = [bundledTools, "/opt/homebrew/bin", "/usr/local/bin", env["PATH"]].compactMap { $0 }.joined(separator: ":")
         process.environment = env

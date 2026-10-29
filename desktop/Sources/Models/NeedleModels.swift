@@ -14,6 +14,8 @@ struct NeedleSettings: Codable, Equatable {
     var format = "mp3"
     var playlistName = "Needle"
     var cliPath = ""
+    var browserSession: BrowserSessionBrowser?
+    var browserProfile: String?
 }
 
 enum JobStage: String, Codable {
