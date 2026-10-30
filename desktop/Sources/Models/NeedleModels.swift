@@ -61,6 +61,8 @@ struct TrackRequest: Codable, Equatable, Identifiable {
     /// Optional fields keep history written by older builds decodable.
     var spotifyPlaylistName: String?
     var spotifyPlaylistURI: String?
+    var spotifyMetadataSnapshot: SpotifyMetadataSnapshot?
+    var spotifyReconcileNeeded: Bool?
     var stage: JobStage
     var settingsSnapshot: NeedleSettings?
     var errorDetail: String?
@@ -68,6 +70,8 @@ struct TrackRequest: Codable, Equatable, Identifiable {
     /// True when the file was discovered on disk rather than downloaded in this app session.
     /// Optional for compatibility with history written by older releases.
     var discoveredFromFolder: Bool?
+    var artworkUpdatedAt: Date?
+    var artworkSuppressed: Bool?
 
     init(id: UUID = UUID(), artist: String, title: String, album: String = "", sourceURL: String = "", savedPath: String? = nil, spotifyStatus: SpotifyStatus = .notQueued, spotifyJobID: String? = nil, spotifyPlaylistName: String? = nil, spotifyPlaylistURI: String? = nil, stage: JobStage = .saving, settingsSnapshot: NeedleSettings? = nil, date: Date = .now, discoveredFromFolder: Bool? = nil) {
         self.id = id; self.artist = artist; self.title = title; self.album = album; self.sourceURL = sourceURL; self.savedPath = savedPath; self.spotifyStatus = spotifyStatus; self.spotifyJobID = spotifyJobID; self.spotifyPlaylistName = spotifyPlaylistName; self.spotifyPlaylistURI = spotifyPlaylistURI; self.stage = stage; self.settingsSnapshot = settingsSnapshot; self.date = date
@@ -228,6 +232,26 @@ struct Candidate: Codable {
 struct Score: Codable { let confidence: Double?; let status: String; let positives: [String]; let warnings: [String]; let rejects: [String] }
 
 struct HostReceipt: Codable { let ok: Bool; let jobId: String?; let error: String? }
-struct HostStatus: Codable { let ok: Bool; let status: String; let playlistUri: String?; let addedUri: String?; var detail: String? = nil }
+struct SpotifyMetadataSnapshot: Codable, Equatable {
+    let name: String
+    let artist: String
+    let album: String?
+    let savedPath: String?
+    var durationMs: UInt64? = nil
+    var fileRevision: String? = nil
+
+    init(track: TrackRequest) {
+        name = track.title; artist = track.artist; album = track.album.isEmpty ? nil : track.album; savedPath = track.savedPath
+    }
+}
+
+struct HostStatus: Codable {
+    let ok: Bool
+    let status: String
+    let playlistUri: String?
+    let addedUri: String?
+    var detail: String? = nil
+    var track: SpotifyMetadataSnapshot? = nil
+}
 struct DoctorResponse: Codable { let ok: Bool; let tools: [DoctorTool] }
 struct DoctorTool: Codable { let name: String?; let path: String?; let ok: Bool?; let optional: Bool?; let message: String?; let version: String? }

@@ -11,6 +11,7 @@ struct MetadataDraft: Codable, Identifiable {
     var source: String
     var warnings: [String]
     let sourceURL: String
+    var artworkSuppressed: Bool? = nil
 
     var id: String { sourceURL }
 
@@ -30,6 +31,7 @@ struct MetadataDraft: Codable, Identifiable {
         case source
         case warnings
         case sourceURL = "source_url"
+        case artworkSuppressed = "artwork_suppressed"
     }
 }
 
@@ -121,6 +123,10 @@ struct MetadataReviewView: View {
                     TextField("Artwork URL (optional)", text: $draft.artworkURL)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Release artwork URL")
+                        .onChange(of: draft.artworkURL) { old, new in
+                            if !new.isEmpty { draft.artworkSuppressed = false }
+                            else if !old.isEmpty { draft.artworkSuppressed = true }
+                        }
                 }
             }
         }

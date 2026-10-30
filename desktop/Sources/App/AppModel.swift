@@ -16,6 +16,7 @@ final class AppModel {
     var reviewQueue: ReviewQueue
     var discovery: DiscoveryStore
     var bookmarks: BookmarkStore
+    var artworkBackfill: ArtworkBackfillService
     var isCancelling = false
     var isCheckingTools = false
     var tools: DoctorResponse?
@@ -23,6 +24,8 @@ final class AppModel {
     var message: String?
     var selectedCandidateID: String?
     var pollingJobIDs: Set<UUID> = []
+    private var reconcilingTrackIDs: Set<UUID> = []
+    private var spotifyReconcileRevisions: [UUID: Int] = [:]
     var isScanningLibrary = false
     var libraryScanError: String?
     var libraryScanWarnings: [String] = []
@@ -39,8 +42,15 @@ final class AppModel {
         reviewQueue = ReviewQueue(defaults: defaults, history: savedHistory)
         discovery = DiscoveryStore(defaults: defaults)
         bookmarks = BookmarkStore(defaults: defaults)
+        artworkBackfill = ArtworkBackfillService(defaults: defaults)
         reviewQueue.onSaved = { [weak self] track, spotify in if spotify { self?.enqueue(track) } }
+        artworkBackfill.onFileUpdated = { [weak self] updated, previous in
+            self?.reconcileSpotifyMetadata(updated, previous: previous)
+        }
         recoverSpotifyJobs()
+        if history.tracks.contains(where: { $0.spotifyJobID != nil && $0.savedPath.map(FileManager.default.fileExists(atPath:)) == true }) {
+            scanLibrary()
+        }
     }
 
     static func mediaURL(_ text: String) -> URL? {
@@ -107,10 +117,18 @@ final class AppModel {
             case .success(let summary):
                 libraryImportedCount = summary.imported
                 libraryScanWarnings = summary.warnings
+                for update in summary.spotifyUpdates { reconcileSpotifyMetadata(update.current, previous: update.previous) }
+                refreshArtwork()
             case .failure(let error):
                 libraryScanError = error.localizedDescription
                 libraryScanWarnings = []
             }
+        }
+    }
+
+    func refreshArtwork(retry: Bool = false) {
+        Task {
+            await artworkBackfill.run(bookmarks: bookmarks, history: history, settings: settings.value, retry: retry)
         }
     }
 
@@ -220,6 +238,7 @@ final class AppModel {
 
     func enqueue(_ track: TrackRequest, handoff: ((TrackRequest, String) async -> Result<String, Error>)? = nil) {
         guard track.savedPath != nil, track.spotifyStatus != .added, !pollingJobIDs.contains(track.id) else { return }
+        if track.spotifyReconcileNeeded == true { reconcileSpotifyMetadata(track); return }
         if track.spotifyJobID != nil {
             Task { await poll(track, resume: true) }
             return
@@ -260,7 +279,60 @@ final class AppModel {
         }
     }
 
-    private func poll(_ initial: TrackRequest, resume: Bool = false) async {
+    func reconcileSpotifyMetadata(_ updated: TrackRequest, previous: TrackRequest? = nil,
+                                  handoff: ((TrackRequest, TrackRequest) async -> Result<String, Error>)? = nil) {
+        guard updated.spotifyJobID != nil, let path = updated.savedPath,
+              FileManager.default.fileExists(atPath: path), URL(fileURLWithPath: path).pathExtension.lowercased() == "mp3" else { return }
+        spotifyReconcileRevisions[updated.id, default: 0] += 1
+        var current = history.tracks.first(where: { $0.id == updated.id }) ?? updated
+        current.spotifyReconcileNeeded = true
+        current.spotifyStatus = .pending
+        current.stage = .spotifyPending
+        current.errorDetail = "Checking Spotify for this file's current metadata. The playlist entry is preserved until its replacement is confirmed."
+        history.upsert(current)
+        guard reconcilingTrackIDs.insert(current.id).inserted else { return }
+        Task {
+            defer { reconcilingTrackIDs.remove(current.id) }
+            var baseline = previous ?? current
+            while let desired = history.tracks.first(where: { $0.id == current.id }) {
+                let requestedRevision = spotifyReconcileRevisions[current.id]
+                let result = if let handoff { await handoff(desired, baseline) } else { await spotify.reconcile(track: desired, previous: baseline) }
+                guard var latest = history.tracks.first(where: { $0.id == current.id }), latest.spotifyJobID == desired.spotifyJobID else { return }
+                switch result {
+                case .success(let id):
+                    latest.spotifyJobID = id
+                    latest.spotifyStatus = .pending
+                    latest.spotifyReconcileNeeded = true
+                    latest.stage = .spotifyPending
+                    history.upsert(latest)
+                    if spotifyReconcileRevisions[current.id] != requestedRevision
+                        || SpotifyMetadataSnapshot(track: latest) != SpotifyMetadataSnapshot(track: desired) {
+                        baseline = desired
+                        continue
+                    }
+                    // An older poll may still be awaiting the predecessor. It
+                    // will stop at its job-ID guard and this poll owns the new ID.
+                    let pending = latest
+                    Task {
+                        while pollingJobIDs.contains(pending.id) { try? await Task.sleep(for: .milliseconds(100)) }
+                        await poll(pending, resume: true)
+                    }
+                    return
+                case .failure(let error):
+                    if spotifyReconcileRevisions[current.id] != requestedRevision { baseline = desired; continue }
+                    latest.spotifyStatus = .failed
+                    latest.stage = .saved
+                    latest.errorDetail = "The file is updated. Spotify metadata repair needs attention: \(error.localizedDescription)"
+                    history.upsert(latest)
+                    return
+                }
+            }
+        }
+    }
+
+    func poll(_ initial: TrackRequest, resume: Bool = false,
+              delays: [Int] = [0, 2, 4, 8, 15, 30, 30, 30, 30, 30, 30, 30],
+              statusCheck: ((String) async -> Result<HostStatus, Error>)? = nil) async {
         guard let id = initial.spotifyJobID, !pollingJobIDs.contains(initial.id) else { return }
         pollingJobIDs.insert(initial.id)
         defer { pollingJobIDs.remove(initial.id) }
@@ -269,16 +341,24 @@ final class AppModel {
         // Local-file indexing can take several minutes. Keep the same job alive
         // long enough for Spotify to surface it, while still leaving a clear
         // retry state instead of polling forever.
-        for delay in [0, 2, 4, 8, 15, 30, 30, 30, 30, 30, 30, 30] {
+        for delay in delays {
             if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-            switch await spotify.status(jobID: id) {
+            let response = if let statusCheck { await statusCheck(id) } else { await spotify.status(jobID: id) }
+            guard let latest = history.tracks.first(where: { $0.id == initial.id }), latest.spotifyJobID == id else { return }
+            track = latest
+            switch response {
             case .success(let status):
                 if status.status == "added", status.playlistUri != nil, status.addedUri != nil {
                     track.spotifyStatus = .added
                     track.spotifyPlaylistURI = status.playlistUri
                     track.stage = .spotifyAdded
-                    track.errorDetail = nil
+                    track.errorDetail = status.detail
+                    track.spotifyMetadataSnapshot = status.track
+                    let delivered = status.track
+                    let matchesCurrent = delivered.map { $0.name == track.title && $0.artist == track.artist && ($0.album ?? "") == track.album } ?? (track.spotifyReconcileNeeded != true)
+                    track.spotifyReconcileNeeded = !matchesCurrent
                     history.upsert(track)
+                    if !matchesCurrent { reconcileSpotifyMetadata(track) }
                     return
                 }
                 if status.status == "pending" {
@@ -289,8 +369,10 @@ final class AppModel {
                 if status.status == "unknown" {
                     track.spotifyStatus = .unknown
                     track.stage = .saved
-                    track.spotifyJobID = nil
-                    track.errorDetail = "Spotify did not confirm this job. Your file is safe; you can retry delivery."
+                    if track.spotifyReconcileNeeded != true { track.spotifyJobID = nil }
+                    track.errorDetail = track.spotifyReconcileNeeded == true
+                        ? "Spotify metadata repair could not find its original receipt. Your file is saved; Check Spotify retries the same repair."
+                        : "Spotify did not confirm this job. Your file is safe; you can retry delivery."
                     history.upsert(track)
                     return
                 }
@@ -298,6 +380,8 @@ final class AppModel {
                 track.errorDetail = "Waiting for Spotify. \(error.localizedDescription)"
             }
         }
+        guard let latest = history.tracks.first(where: { $0.id == initial.id }), latest.spotifyJobID == id else { return }
+        track = latest
         track.spotifyStatus = .pending
         track.stage = .spotifyPending
         if track.errorDetail == nil || track.errorDetail?.contains("Local-file indexing or companion startup") == true {
@@ -320,8 +404,9 @@ final class AppModel {
         guard case .success(let status) = await spotify.status(jobID: id),
               status.status == "added",
               let playlistURI = status.playlistUri else { return }
-        var track = initial
+        guard var track = history.tracks.first(where: { $0.id == initial.id }), track.spotifyJobID == id else { return }
         track.spotifyPlaylistURI = playlistURI
+        track.spotifyMetadataSnapshot = status.track
         history.upsert(track)
     }
 }

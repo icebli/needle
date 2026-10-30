@@ -125,6 +125,7 @@ struct TrackRow: View {
     }
 
     private func activityLabel(for track: TrackRequest) -> String {
+        if track.spotifyStatus == .pending, track.spotifyReconcileNeeded == true { return "File saved · Updating Spotify metadata" }
         if track.spotifyStatus == .pending,
            track.errorDetail?.hasPrefix("Open Spotify Local Files and choose the recording:") == true {
             return "File saved · Spotify needs a recording choice"

@@ -8,7 +8,8 @@
   const DISCOVERY_SERVER = "http://127.0.0.1:29879";
   const SPOTIFY_API = "https://api.spotify.com/v1";
   const POLL_INTERVAL_MS = 750;
-  const MAX_ARTISTS = 20;
+  const MAX_ARTISTS = 100;
+  const ARTIST_PAGE_SIZE = 50;
   const MAX_TRACKS = 10;
   const API_DEADLINE_MS = 25000;
   const GRAPHQL_DEFINITIONS = {
@@ -121,14 +122,23 @@
     const definitions = graphql?.Definitions;
     if (!graphql?.Request) return null;
     if (request.operation === "top-artists" && (definitions?.userTopContent || GRAPHQL_DEFINITIONS.userTopContent)) {
-      const response = await withDeadline(graphql.Request(definitions?.userTopContent || GRAPHQL_DEFINITIONS.userTopContent, {
-        includeTopArtists: true,
-        topArtistsInput: { offset: 0, limit: MAX_ARTISTS, sortBy: "AFFINITY", timeRange: "MID_TERM" },
-        includeTopTracks: false,
-        topTracksInput: { offset: 0, limit: 1, sortBy: "AFFINITY", timeRange: "MID_TERM" },
-      }));
-      const items = response?.data?.me?.profile?.topArtists?.items;
-      return requireArray(items, "top artist", response?.data?.me?.profile?.topArtists).slice(0, MAX_ARTISTS).map((item) => validateArtist(normalizeGraphQLArtist(item)));
+      const artists = new Map();
+      for (let offset = 0; offset < MAX_ARTISTS; offset += ARTIST_PAGE_SIZE) {
+        const response = await withDeadline(graphql.Request(definitions?.userTopContent || GRAPHQL_DEFINITIONS.userTopContent, {
+          includeTopArtists: true,
+          topArtistsInput: { offset, limit: ARTIST_PAGE_SIZE, sortBy: "AFFINITY", timeRange: "MID_TERM" },
+          includeTopTracks: false,
+          topTracksInput: { offset: 0, limit: 1, sortBy: "AFFINITY", timeRange: "MID_TERM" },
+        }));
+        const items = requireArray(response?.data?.me?.profile?.topArtists?.items, "top artist", response?.data?.me?.profile?.topArtists);
+        const previousCount = artists.size;
+        for (const item of items.slice(0, ARTIST_PAGE_SIZE)) {
+          const artist = validateArtist(normalizeGraphQLArtist(item));
+          artists.set(artist.id, artist);
+        }
+        if (items.length < ARTIST_PAGE_SIZE || artists.size === previousCount) break;
+      }
+      return Array.from(artists.values()).slice(0, MAX_ARTISTS);
     }
     if (request.operation === "catalog" && (definitions?.searchTracks || GRAPHQL_DEFINITIONS.searchTracks)) {
       const artist = String(request.artist || "").trim();
@@ -181,10 +191,19 @@
     }
     if (!CosmosAsync?.get) throw new Error("Spotify discovery API is unavailable");
     if (request.operation === "top-artists") {
-      const response = await withDeadline(CosmosAsync.get(`${SPOTIFY_API}/me/top/artists?time_range=medium_term&limit=${MAX_ARTISTS}`));
-      const body = unwrapCosmosResponse(response, "Spotify top artists");
-      const items = requireArray(body?.items, "top artist", body);
-      return { ok: true, artists: items.slice(0, MAX_ARTISTS).map(validateArtist) };
+      const artists = new Map();
+      for (let offset = 0; offset < MAX_ARTISTS; offset += ARTIST_PAGE_SIZE) {
+        const response = await withDeadline(CosmosAsync.get(`${SPOTIFY_API}/me/top/artists?time_range=medium_term&limit=${ARTIST_PAGE_SIZE}&offset=${offset}`));
+        const body = unwrapCosmosResponse(response, "Spotify top artists");
+        const items = requireArray(body?.items, "top artist", body);
+        const previousCount = artists.size;
+        for (const item of items.slice(0, ARTIST_PAGE_SIZE)) {
+          const artist = validateArtist(item);
+          artists.set(artist.id, artist);
+        }
+        if (items.length < ARTIST_PAGE_SIZE || artists.size === previousCount) break;
+      }
+      return { ok: true, artists: Array.from(artists.values()).slice(0, MAX_ARTISTS) };
     }
     if (request.operation === "catalog") {
       const artist = String(request.artist || "").trim();
@@ -205,7 +224,7 @@
     try {
       let result;
       try {
-        result = await spotifyRequest(Spicetify, request);
+        result = await withDeadline(spotifyRequest(Spicetify, request));
       } catch (error) {
         result = responseError(error);
       }

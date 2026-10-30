@@ -9,7 +9,7 @@ struct ReleaseBookmark: Codable, Identifiable {
     let candidate: Candidate
     let score: Score?
     let date: Date
-    let artwork: ArtworkReference?
+    var artwork: ArtworkReference?
 
     init(artist: String, title: String, album: String = "", candidate: Candidate, score: Score? = nil, date: Date = .now, artwork: ArtworkReference? = nil) {
         self.id = candidate.provider + ":" + candidate.id
@@ -48,6 +48,18 @@ final class BookmarkStore {
     func remove(_ bookmark: ReleaseBookmark) {
         items.removeAll { $0.id == bookmark.id }
         persist()
+    }
+
+    @discardableResult
+    func fillArtwork(_ artwork: ArtworkReference, for original: ReleaseBookmark) -> Bool {
+        guard let index = items.firstIndex(where: { $0.id == original.id }),
+              items[index].date == original.date,
+              items[index].candidate.url == original.candidate.url,
+              items[index].artist == original.artist, items[index].title == original.title,
+              items[index].album == original.album, items[index].artwork == nil else { return false }
+        items[index].artwork = artwork
+        persist()
+        return true
     }
 
     private func persist() {

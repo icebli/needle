@@ -177,6 +177,7 @@ actor NeedleCLIService {
             finished.artist = saved.artist ?? track.artist
             finished.title = saved.title ?? track.title
             finished.album = saved.album ?? track.album
+            finished.artworkSuppressed = approved?.artworkSuppressed ?? track.artworkSuppressed
             return .success(finished)
         } catch { return .failure(error) }
     }

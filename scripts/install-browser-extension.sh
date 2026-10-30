@@ -31,6 +31,7 @@ mkdir -p "$INSTALL_DIR" "$CARGO_BIN_DIR" "$FIREFOX_NATIVE_DIR" "$ZEN_NATIVE_DIR"
 install -m 0755 "$REPO_DIR/target/release/needle" "$INSTALL_DIR/needle"
 install -m 0755 "$REPO_DIR/target/release/needle" "$CARGO_BIN_DIR/needle"
 install -m 0755 "$REPO_DIR/target/release/needle-browser-host" "$INSTALL_DIR/needle-browser-host"
+python3 "$SCRIPT_DIR/restart-spotify-host.py" "$INSTALL_DIR/needle-browser-host" "$CARGO_BIN_DIR/needle-browser-host" "/Applications/Needle.app/Contents/Resources/bin/needle-browser-host"
 
 python3 - "$REPO_DIR/native-host/dev.tege.needle.browser.json.in" "$NATIVE_MANIFEST" "$INSTALL_DIR/needle-browser-host" <<'PY'
 import json

@@ -72,14 +72,16 @@ struct LibraryRepairView: View {
                                         clearAlbum: clearAlbum, artworkURL: artworkURL,
                                         remoteArtworkURL: remoteArtworkURL, settings: model.settings.value) {
             case .success(let result):
-                var updated = track
+                let previous = model.history.tracks.first(where: { $0.id == track.id }) ?? track
+                var updated = previous
                 updated.artist = result.0.artist ?? artist
                 updated.title = result.0.title ?? title
                 updated.album = result.0.album ?? ""
                 updated.date = .now
                 model.history.upsert(updated)
+                model.reconcileSpotifyMetadata(updated, previous: previous)
                 backupPath = result.1
-                status = "Saved changes to the existing audio file. Spotify may need to refresh Local Files before showing new artwork or tags."
+                status = "Saved changes to the existing audio file. Needle is checking its existing Spotify playlist entry automatically. Spotify artwork refresh remains unconfirmed."
                 artworkURL = nil; remoteArtworkURL = nil; sourceArtworkCandidateURL = nil
                 clearAlbum = false
                 artist = updated.artist; title = updated.title; album = updated.album

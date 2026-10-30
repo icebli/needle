@@ -2,6 +2,17 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.10.1
+
+- Fill missing artwork for bookmarks and saved recordings using verified recording and release identities.
+- Try additional eligible editions when a release has no cover, including original mixtapes and separately credited featured artists.
+- Keep conflicting source, filename, album, remix, and live metadata visible instead of attaching a guessed cover.
+- Preserve reviewed metadata and repair backups so later artwork passes can handle corrected files safely.
+- Retry previous artwork misses after upgrading and distinguish metadata conflicts, missing source evidence, catalog misses, and lookup failures.
+- Find recordings from a source link without requiring artist and song fields first.
+- Reconcile previously delivered Spotify playlist entries after metadata repairs, preserving the original entry until its replacement is confirmed.
+- Expand Discover artist loading and multi-artist selection.
+
 ## 0.9.2
 
 - Reuse checksum-verified corresponding-source archives when upstream source servers are unavailable during release packaging.

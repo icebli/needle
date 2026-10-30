@@ -15,6 +15,24 @@ actor SpotifyHostService {
         } catch { return .failure(error) }
     }
 
+    func reconcile(track: TrackRequest, previous: TrackRequest) async -> Result<String, Error> {
+        guard let jobID = track.spotifyJobID, let host = findHost() else {
+            return .failure(CLIError.message("The original Spotify delivery receipt is unavailable. Your file is saved."))
+        }
+        struct Request: Encodable {
+            let previousJobId: String
+            let track: SpotifyMetadataSnapshot
+            let previousTrack: SpotifyMetadataSnapshot
+        }
+        do {
+            let input = try JSONEncoder().encode(Request(previousJobId: jobID, track: SpotifyMetadataSnapshot(track: track), previousTrack: SpotifyMetadataSnapshot(track: previous)))
+            let result = try await run(host, ["reconcile"], input: input)
+            let receipt = try JSONDecoder().decode(HostReceipt.self, from: result.output)
+            guard receipt.ok, let id = receipt.jobId, !id.isEmpty else { throw CLIError.message("Spotify did not accept the metadata repair.") }
+            return .success(id)
+        } catch { return .failure(error) }
+    }
+
     func status(jobID: String, resume: Bool = false) async -> Result<HostStatus, Error> {
         guard let host = findHost() else { return .failure(CLIError.message("Needle's Spotify bridge is missing. Your audio file is still saved.")) }
         do {

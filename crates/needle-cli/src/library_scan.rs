@@ -132,6 +132,11 @@ impl Scanner {
             }
         };
         let (fallback_artist, fallback_title, fallback_album) = filename_fallback(root, path);
+        let album = if tags.tag_type.is_some() {
+            tags.album
+        } else {
+            tags.album.or(fallback_album)
+        };
         let source_url = read_source_url(path, &mut self.warnings);
         let modified_ms = fs::metadata(path).ok().and_then(|metadata| {
             metadata
@@ -147,7 +152,7 @@ impl Scanner {
             path: path.to_string_lossy().into_owned(),
             artist: tags.artist.or(fallback_artist),
             title: tags.title.or(fallback_title),
-            album: tags.album.or(fallback_album),
+            album,
             source_url,
             modified_ms,
         });
@@ -386,6 +391,41 @@ mod tests {
         assert_eq!(response.tracks[0].album.as_deref(), Some("Tagged Album"));
         assert!(response.warnings.is_empty());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cleared_album_is_not_recreated_from_folder_name() {
+        let root = temp_root();
+        let folder = root.join("Artist").join("Stale Album");
+        fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("01 - Song.mp3");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/tag_repair.mp3"),
+            &path,
+        )
+        .unwrap();
+        needle_core::tag::write_tags(
+            &path,
+            &needle_core::tag::TagPlan {
+                artist: "Artist".into(),
+                title: "Song".into(),
+                album: Some("Stale Album".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        needle_core::tag::repair_tags_with_backup(
+            &path,
+            &needle_core::tag::TagRepair {
+                clear_album: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let response = run(&root).unwrap();
+        assert_eq!(response.tracks.len(), 1);
+        assert_eq!(response.tracks[0].album, None);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

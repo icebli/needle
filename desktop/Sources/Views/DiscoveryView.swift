@@ -148,7 +148,11 @@ struct DiscoveryView: View {
     private var artistChooser: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Choose artists").font(.headline)
-            Text("Select up to five. Choose one for a deeper search.").font(.callout).foregroundStyle(.secondary)
+            HStack {
+                Button("Select all") { store.selectedArtistIDs = Set(store.artists.map(\.id)) }
+                Button("Clear") { store.selectedArtistIDs.removeAll() }
+            }.disabled(busy)
+            Text("Select any number of artists. Fewer artists gives each a deeper search.").font(.callout).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(Array(store.artists.enumerated()), id: \.element.id) { index, artist in
@@ -156,8 +160,8 @@ struct DiscoveryView: View {
                             if value { store.selectedArtistIDs.insert(artist.id) } else { store.selectedArtistIDs.remove(artist.id) }
                         })) { Text("\(index + 1). \(artist.name)") }
                         .toggleStyle(.checkbox)
-                        .disabled(busy || (!store.selectedArtistIDs.contains(artist.id) && store.selectedArtistIDs.count >= 5))
-                        .help("Up to five artists per search. Uncheck one to choose another.")
+                        .disabled(busy)
+                        .help("Selected artists are searched in order, with paced Spotify checks.")
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
             }.frame(height: 330)

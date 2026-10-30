@@ -21,6 +21,25 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Fill missing artwork using a verified catalog recording and release
+    Artwork {
+        #[arg(long)]
+        artist: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long, default_value = "")]
+        album: String,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        /// Immutable source title from the selected source or provenance sidecar.
+        #[arg(long)]
+        source_title: Option<String>,
+        /// Resolve and explain artwork without changing the audio file.
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Resolve, score, and download a track
     Get {
         /// Artist name
@@ -131,6 +150,9 @@ enum Commands {
         /// Download artwork from this explicitly approved URL (max 10 MiB)
         #[arg(long)]
         artwork_url: Option<String>,
+        /// Remove all embedded artwork while preserving audio and text tags.
+        #[arg(long)]
+        clear_artwork: bool,
         #[arg(long)]
         json: bool,
     },
@@ -175,6 +197,26 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Artwork {
+            artist,
+            title,
+            album,
+            path,
+            source_title,
+            dry_run,
+            json,
+        } => {
+            cmd_artwork(
+                &artist,
+                &title,
+                &album,
+                path,
+                source_title.as_deref(),
+                dry_run,
+                json,
+            )
+            .await
+        }
         Commands::Get {
             artist,
             title,
@@ -254,6 +296,7 @@ async fn main() -> Result<()> {
             album_artist,
             artwork,
             artwork_url,
+            clear_artwork,
             json,
         } => {
             cmd_repair(
@@ -265,6 +308,7 @@ async fn main() -> Result<()> {
                 album_artist,
                 artwork,
                 artwork_url,
+                clear_artwork,
                 json,
             )
             .await
@@ -334,6 +378,504 @@ fn cmd_library_scan(root: PathBuf, json: bool) -> Result<()> {
     Ok(())
 }
 
+#[derive(Serialize)]
+struct ArtworkResult {
+    ok: bool,
+    status: &'static str,
+    artwork: Option<needle_core::metadata::ArtworkReference>,
+    track: Option<needle_core::tag::TagInspection>,
+    reason: Option<&'static str>,
+    lookup_album: String,
+}
+
+#[derive(Default)]
+struct ArtworkSourceEvidence {
+    titles: Vec<String>,
+    provenance: bool,
+    approved_albums: Vec<String>,
+    previous_title_words: Vec<std::collections::HashSet<String>>,
+}
+
+fn evidence_words(value: &str) -> std::collections::HashSet<String> {
+    evidence_sequence(value).into_iter().collect()
+}
+
+fn evidence_sequence(value: &str) -> Vec<String> {
+    value
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .filter_map(|word| match word {
+            "rmx" => Some("remix".to_owned()),
+            "ft" | "feat" | "featuring" => None,
+            other => Some(other.to_owned()),
+        })
+        .collect()
+}
+
+fn contains_sequence(haystack: &[String], needle: &[String]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
+}
+
+fn presentation_words() -> [&'static str; 7] {
+    ["official", "audio", "video", "lyrics", "lyric", "hd", "hq"]
+}
+
+fn without_artwork_presentation(value: &str) -> &str {
+    let mut value = value.trim_end();
+    loop {
+        let lower = value.to_ascii_lowercase();
+        let suffix = [
+            "(official music video)",
+            "[official music video]",
+            "(official audio)",
+            "[official audio]",
+            "(audio hq)",
+            "[audio hq]",
+            "(music video)",
+            "[music video]",
+            " with lyrics!",
+            " with lyrics",
+        ]
+        .into_iter()
+        .find(|suffix| lower.ends_with(suffix));
+        match suffix {
+            Some(suffix) => value = value[..value.len() - suffix.len()].trim_end(),
+            None => return value,
+        }
+    }
+}
+
+fn without_production_credit(value: &str) -> &str {
+    fn is_credit(value: &str) -> bool {
+        let lower = value.trim().to_ascii_lowercase();
+        let producer = ["produced by ", "prod. by ", "prod by ", "prod. "]
+            .into_iter()
+            .find_map(|prefix| lower.strip_prefix(prefix));
+        producer.is_some_and(|producer| {
+            !producer.trim().is_empty()
+                && !producer.contains(['(', ')', '[', ']', '|', ';', '–', '—'])
+                && !producer.contains(" - ")
+                && needle_core::normalize::normalize_title(producer)
+                    .negative_markers
+                    .is_empty()
+                && !producer.split(|c: char| !c.is_alphanumeric()).any(|word| {
+                    [
+                        "feat",
+                        "ft",
+                        "featuring",
+                        "version",
+                        "edit",
+                        "extended",
+                        "part",
+                        "pt",
+                        "edition",
+                    ]
+                    .contains(&word)
+                })
+        })
+    }
+    let value = value.trim_end();
+    for (open, close) in [('[', ']'), ('(', ')')] {
+        if let Some(start) = value.rfind(open) {
+            if value.ends_with(close) && is_credit(&value[start + 1..value.len() - 1]) {
+                return value[..start].trim_end();
+            }
+        }
+    }
+    let lower = value.to_ascii_lowercase();
+    for marker in [" produced by ", " prod. "] {
+        if let Some(start) = lower.rfind(marker) {
+            if is_credit(&value[start + 1..]) {
+                return value[..start].trim_end();
+            }
+        }
+    }
+    value
+}
+
+fn read_artwork_source_evidence(
+    path: &std::path::Path,
+    artist: &str,
+    title: &str,
+) -> ArtworkSourceEvidence {
+    let mut evidence = ArtworkSourceEvidence::default();
+    let sidecar = path.with_extension("json");
+    let Ok(metadata) = std::fs::symlink_metadata(&sidecar) else {
+        return evidence;
+    };
+    if !metadata.file_type().is_file() || metadata.len() > 512 * 1024 {
+        return evidence;
+    }
+    let Ok(bytes) = std::fs::read(&sidecar) else {
+        return evidence;
+    };
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return evidence;
+    };
+    evidence.approved_albums = value
+        .pointer("/requested/album")
+        .and_then(serde_json::Value::as_str)
+        .filter(|album| !album.trim().is_empty())
+        .map(str::to_owned)
+        .into_iter()
+        .collect();
+    let reviewed_identity = value
+        .pointer("/metadata/resolved_artist")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|reviewed| needle_core::metadata::same_identity(reviewed, artist))
+        && value
+            .pointer("/metadata/resolved_title")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|reviewed| {
+                let mut words = evidence_sequence(reviewed);
+                for guest in value
+                    .pointer("/metadata/featured_artists")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                {
+                    words.extend(evidence_sequence(guest));
+                }
+                words == evidence_sequence(title)
+            });
+    if value
+        .pointer("/metadata/provider")
+        .and_then(serde_json::Value::as_str)
+        == Some("source_review")
+        && reviewed_identity
+    {
+        evidence.approved_albums.extend(
+            value
+                .pointer("/metadata/resolved_album")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+        );
+    }
+    if value
+        .pointer("/metadata/provider")
+        .and_then(serde_json::Value::as_str)
+        == Some("source_review")
+        && reviewed_identity
+    {
+        for repair in value
+            .get("repairs")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(previous) = repair.get("prior_metadata") else {
+                continue;
+            };
+            let Some(title) = previous
+                .get("resolved_title")
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            let mut words = evidence_words(title);
+            for artist in previous
+                .get("featured_artists")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+            {
+                words.extend(evidence_words(artist));
+            }
+            evidence.previous_title_words.push(words);
+        }
+    }
+    if let Some(title) = value
+        .get("selected_source")
+        .and_then(|source| source.get("title"))
+        .and_then(serde_json::Value::as_str)
+    {
+        evidence.titles.push(title.to_owned());
+        evidence.provenance = true;
+    }
+    evidence
+}
+
+fn artwork_source_matches(
+    artist: &str,
+    title: &str,
+    path: Option<&std::path::Path>,
+    source_title: Option<&str>,
+) -> bool {
+    let mut evidence = path
+        .map(|path| read_artwork_source_evidence(path, artist, title))
+        .unwrap_or_default();
+    if let Some(source_title) = source_title.filter(|value| !value.trim().is_empty()) {
+        evidence.titles.push(source_title.to_owned());
+        evidence.provenance = true;
+    }
+    if evidence.titles.is_empty() || !evidence.provenance {
+        return false;
+    }
+
+    let title = without_artwork_presentation(title);
+    let artist_words = evidence_words(artist);
+    let title_words = evidence_words(title);
+    let artist_sequence = evidence_sequence(artist);
+    let title_sequence = evidence_sequence(title);
+    if title_words.is_empty() {
+        return false;
+    }
+    let wrappers = presentation_words();
+    let expected = artist_words
+        .union(&title_words)
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+
+    for source in &evidence.titles {
+        let source = without_production_credit(without_artwork_presentation(source));
+        let source_sequence = evidence_sequence(source);
+        let words = evidence_words(source);
+        let meaningful = words
+            .iter()
+            .filter(|word| !wrappers.contains(&word.as_str()))
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        if !contains_sequence(&source_sequence, &title_sequence)
+            || !contains_sequence(&source_sequence, &artist_sequence)
+            || !title_words.is_subset(&meaningful)
+            || meaningful.iter().any(|word| !expected.contains(word))
+        {
+            return false;
+        }
+        let has_artist = artist_words.iter().any(|word| meaningful.contains(word));
+        if source.contains(" - ") {
+            let prefix = source
+                .split_once(" - ")
+                .map(|(prefix, _)| prefix)
+                .unwrap_or_default();
+            let prefix_words = evidence_words(prefix);
+            if !has_artist || prefix_words.iter().any(|word| !expected.contains(word)) {
+                return false;
+            }
+        }
+    }
+
+    if let Some(path) = path {
+        let filename = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default()
+            .trim_start_matches(|c: char| c.is_ascii_digit())
+            .trim_start_matches([' ', '-']);
+        let words = evidence_words(filename);
+        let meaningful = words
+            .iter()
+            .filter(|word| !wrappers.contains(&word.as_str()))
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        if meaningful.iter().any(|word| !expected.contains(word))
+            && !evidence
+                .previous_title_words
+                .iter()
+                .any(|previous| previous == &meaningful)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn artwork_file_state(
+    path: &std::path::Path,
+    artist: &str,
+    title: &str,
+    album: &str,
+) -> Result<(needle_core::tag::TagInspection, bool, u64)> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        bail!("artwork fill requires a regular audio file, not a symbolic link");
+    }
+    let hash = needle_core::tag::file_version_hash(path)?;
+    let inspected = needle_core::tag::inspect_tags(path, None)?;
+    let has_artwork = needle_core::tag::has_embedded_artwork(path)?;
+    if !has_artwork
+        && (!inspected
+            .artist
+            .as_deref()
+            .is_some_and(|v| needle_core::metadata::same_identity(v, artist))
+            || !inspected
+                .title
+                .as_deref()
+                .is_some_and(|v| needle_core::metadata::same_identity(v, title))
+            || (!album.trim().is_empty()
+                && !inspected
+                    .album
+                    .as_deref()
+                    .is_some_and(|v| needle_core::metadata::same_identity(v, album))))
+    {
+        bail!("audio tags no longer match the artwork request");
+    }
+    if needle_core::tag::file_version_hash(path)? != hash {
+        bail!("audio file changed while inspecting artwork tags");
+    }
+    Ok((inspected, has_artwork, hash))
+}
+
+#[derive(Debug, PartialEq)]
+enum ArtworkAlbum<'a> {
+    Exact(&'a str),
+    Unspecified,
+    NeedsReview,
+}
+
+fn artwork_lookup_album<'a>(
+    saved_album: &'a str,
+    artist: &str,
+    title: &str,
+    path: Option<&std::path::Path>,
+) -> ArtworkAlbum<'a> {
+    let Some(path) = path else {
+        return ArtworkAlbum::Exact(saved_album);
+    };
+    let evidence = read_artwork_source_evidence(path, artist, title);
+    if evidence
+        .approved_albums
+        .iter()
+        .any(|approved| needle_core::metadata::same_identity(approved, saved_album))
+    {
+        ArtworkAlbum::Exact(saved_album)
+    } else if !needle_core::normalize::normalize_title(saved_album)
+        .negative_markers
+        .is_empty()
+        || evidence_words(saved_album).iter().any(|word| {
+            [
+                "deluxe",
+                "expanded",
+                "anniversary",
+                "reissue",
+                "reloaded",
+                "bonus",
+                "edition",
+            ]
+            .contains(&word.as_str())
+        })
+    {
+        ArtworkAlbum::NeedsReview
+    } else {
+        ArtworkAlbum::Unspecified
+    }
+}
+
+async fn cmd_artwork(
+    artist: &str,
+    title: &str,
+    album: &str,
+    path: Option<PathBuf>,
+    source_title: Option<&str>,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    let initial = path
+        .as_deref()
+        .map(|path| artwork_file_state(path, artist, title, album))
+        .transpose()?;
+    let mut result = ArtworkResult {
+        ok: true,
+        status: "unmatched",
+        artwork: None,
+        track: initial.as_ref().map(|state| state.0.clone()),
+        reason: Some("no_verified_catalog_cover"),
+        lookup_album: String::new(),
+    };
+    if initial.as_ref().is_some_and(|state| state.1) {
+        result.status = "existing";
+        result.reason = None;
+    } else {
+        if !artwork_source_matches(artist, title, path.as_deref(), source_title) {
+            let evidence = path
+                .as_deref()
+                .map(|path| read_artwork_source_evidence(path, artist, title))
+                .unwrap_or_default();
+            result.reason = Some(if evidence.titles.is_empty() && source_title.is_none() {
+                "missing_independent_source_evidence"
+            } else {
+                "source_identity_or_filename_conflict"
+            });
+            if json {
+                println!("{}", serde_json::to_string(&result)?);
+            } else {
+                println!("Artwork: {}", result.status);
+            }
+            return Ok(());
+        }
+        let saved_album = initial
+            .as_ref()
+            .and_then(|state| state.0.album.as_deref())
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or(album);
+        let album = match artwork_lookup_album(saved_album, artist, title, path.as_deref()) {
+            ArtworkAlbum::Exact(album) => album,
+            ArtworkAlbum::Unspecified => "",
+            ArtworkAlbum::NeedsReview => {
+                result.reason = Some("unverified_album_variant_requires_metadata_review");
+                if json {
+                    println!("{}", serde_json::to_string(&result)?);
+                } else {
+                    println!("Artwork: {}", result.status);
+                }
+                return Ok(());
+            }
+        };
+        result.lookup_album = album.to_owned();
+        result.artwork = needle_core::metadata::resolve_artwork(
+            artist,
+            without_artwork_presentation(title),
+            album,
+        )
+        .await?;
+        if let Some(artwork) = result.artwork.as_ref() {
+            result.status = "matched";
+            result.reason = None;
+            if let Some(path) = path.as_deref().filter(|_| !dry_run) {
+                let image = download_approved_artwork(&artwork.url).await?;
+                let fill = (|| -> Result<()> {
+                    let current = artwork_file_state(path, artist, title, saved_album)?;
+                    if current.1 {
+                        result.status = "existing";
+                        result.artwork = None;
+                        result.track = Some(current.0);
+                        return Ok(());
+                    }
+                    if initial.as_ref().map(|state| state.2) != Some(current.2) {
+                        bail!("audio file changed during artwork lookup");
+                    }
+                    let repaired = needle_core::tag::repair_tags_with_backup(
+                        path,
+                        &needle_core::tag::TagRepair {
+                            artwork: Some(std::fs::read(&image)?),
+                            expected_file_hash: initial.as_ref().map(|state| state.2),
+                            only_missing_artwork: true,
+                            ..Default::default()
+                        },
+                    )?;
+                    result.track = Some(repaired.track);
+                    result.status = "filled";
+                    Ok(())
+                })();
+                let _ = std::fs::remove_file(image);
+                fill?;
+            }
+        }
+    }
+    if json {
+        println!("{}", serde_json::to_string(&result)?);
+    } else {
+        println!("Artwork: {}", result.status);
+    }
+    Ok(())
+}
+
 fn cmd_inspect(path: PathBuf, artwork_dir: Option<PathBuf>, json: bool) -> Result<()> {
     let inspected = needle_core::tag::inspect_tags(&path, artwork_dir.as_deref())?;
     if json {
@@ -367,6 +909,7 @@ async fn cmd_repair(
     album_artist: Option<String>,
     artwork: Option<PathBuf>,
     artwork_url: Option<String>,
+    clear_artwork: bool,
     json: bool,
 ) -> Result<()> {
     if album.is_some() && clear_album {
@@ -374,6 +917,9 @@ async fn cmd_repair(
     }
     if artwork_url.is_some() && artwork.is_some() {
         bail!("use either --artwork or --artwork-url, not both");
+    }
+    if clear_artwork && (artwork.is_some() || artwork_url.is_some()) {
+        bail!("use either --clear-artwork or artwork input, not both");
     }
     let mut artwork_data = artwork
         .map(|p| -> Result<Vec<u8>> { Ok(std::fs::read(p)?) })
@@ -421,6 +967,7 @@ async fn cmd_repair(
         && !clear_album
         && album_artist.is_none()
         && artwork_data.is_none()
+        && !clear_artwork
     {
         bail!("provide at least one field to repair");
     }
@@ -434,6 +981,8 @@ async fn cmd_repair(
             album_artist,
             artwork: artwork_data,
             artwork_mime,
+            clear_artwork,
+            ..Default::default()
         },
     )?;
     if json {
@@ -2950,5 +3499,325 @@ esac
         let scored = vec![rejected_candidate()];
         let idx = auto_select_candidate(&scored, true, false).unwrap();
         assert_eq!(idx, 0);
+    }
+}
+
+#[cfg(test)]
+mod artwork_fill_tests {
+    use super::*;
+    #[tokio::test]
+    async fn existing_manual_cover_is_preserved_without_network() {
+        let path = std::env::temp_dir().join(format!(
+            "needle-artwork-preserve-{}.mp3",
+            std::process::id()
+        ));
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/tag_repair.mp3"
+            ),
+            &path,
+        )
+        .unwrap();
+        let image = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/pixel.png"
+        ))
+        .unwrap();
+        let repair = needle_core::tag::repair_tags_with_backup(
+            &path,
+            &needle_core::tag::TagRepair {
+                artwork: Some(image),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        cmd_artwork(
+            "Not the artist",
+            "Not the song",
+            "",
+            Some(path.clone()),
+            None,
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(before, std::fs::read(&path).unwrap());
+        let _ = std::fs::remove_file(repair.backup_path);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn rejects_nonfiles_and_mismatched_embedded_identity() {
+        assert!(artwork_file_state(&std::env::temp_dir(), "Artist", "Song", "").is_err());
+        let path = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/tag_repair.mp3"
+        ));
+        assert!(artwork_file_state(&path, "Not the artist", "Not the song", "").is_err());
+    }
+
+    #[test]
+    fn reviewed_album_is_not_masked_by_an_old_requested_album() {
+        let root =
+            std::env::temp_dir().join(format!("needle-album-artwork-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Song.mp3");
+        let evidence = serde_json::json!({
+            "requested": {"album":"Original Album"},
+            "metadata": {"provider":"source_review", "resolved_artist":"Artist", "resolved_title":"Song", "resolved_album":"Reviewed Album"}
+        });
+        std::fs::write(path.with_extension("json"), evidence.to_string()).unwrap();
+        assert_eq!(
+            artwork_lookup_album("Reviewed Album", "Artist", "Song", Some(&path)),
+            ArtworkAlbum::Exact("Reviewed Album")
+        );
+        assert_eq!(
+            artwork_lookup_album("Original Album", "Artist", "Song", Some(&path)),
+            ArtworkAlbum::Exact("Original Album")
+        );
+        assert_eq!(
+            artwork_lookup_album("Drake Diss", "Artist", "Song", Some(&path)),
+            ArtworkAlbum::Unspecified
+        );
+        for album in ["Acoustic", "Album (Remastered)", "Album Deluxe"] {
+            assert_eq!(
+                artwork_lookup_album(album, "Artist", "Song", Some(&path)),
+                ArtworkAlbum::NeedsReview
+            );
+        }
+        assert_eq!(
+            artwork_lookup_album("Explicit Album", "Artist", "Song", None),
+            ArtworkAlbum::Exact("Explicit Album")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reviewed_legacy_filename_requires_exact_recorded_prior_identity() {
+        let root =
+            std::env::temp_dir().join(format!("needle-reviewed-artwork-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("00 - Song (Live).mp3");
+        let sidecar = path.with_extension("json");
+        let mut evidence = serde_json::json!({
+            "selected_source": {"title":"Artist - Song (Official Audio)"},
+            "metadata": {"provider":"musicbrainz", "resolved_artist":"Artist", "resolved_title":"Song"},
+            "repairs": [{"prior_metadata":{"resolved_title":"Song (Live)","featured_artists":[]}}]
+        });
+        std::fs::write(&sidecar, evidence.to_string()).unwrap();
+        assert!(!artwork_source_matches("Artist", "Song", Some(&path), None));
+        evidence["metadata"]["provider"] = serde_json::json!("source_review");
+        std::fs::write(&sidecar, evidence.to_string()).unwrap();
+        assert!(artwork_source_matches("Artist", "Song", Some(&path), None));
+        evidence["metadata"]["resolved_title"] = serde_json::json!("Other Song");
+        std::fs::write(&sidecar, evidence.to_string()).unwrap();
+        assert!(!artwork_source_matches("Artist", "Song", Some(&path), None));
+        evidence["metadata"]["resolved_title"] = serde_json::json!("Song Song");
+        std::fs::write(&sidecar, evidence.to_string()).unwrap();
+        assert!(!artwork_source_matches("Artist", "Song", Some(&path), None));
+        evidence["metadata"]["resolved_title"] = serde_json::json!("Song");
+        evidence["repairs"][0]["prior_metadata"]["resolved_title"] =
+            serde_json::json!("Another Song (Live)");
+        std::fs::write(&sidecar, evidence.to_string()).unwrap();
+        assert!(!artwork_source_matches("Artist", "Song", Some(&path), None));
+        evidence["selected_source"]["title"] = serde_json::json!("Other Artist - Song");
+        std::fs::write(&sidecar, evidence.to_string()).unwrap();
+        assert!(!artwork_source_matches("Artist", "Song", Some(&path), None));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artwork_dry_run_is_an_explicit_cli_option() {
+        let parsed = Cli::try_parse_from([
+            "needle",
+            "artwork",
+            "--artist",
+            "Artist",
+            "--title",
+            "Song",
+            "--dry-run",
+            "--json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            parsed.command,
+            Commands::Artwork { dry_run: true, .. }
+        ));
+    }
+
+    #[test]
+    fn exact_presentation_suffixes_do_not_change_recording_identity() {
+        for source in [
+            "Artist - Song (Official Music Video)",
+            "Artist - Song [Audio HQ]",
+            "Artist - Song (Prod. by Producer) with Lyrics!",
+        ] {
+            assert!(
+                artwork_source_matches("Artist", "Song", None, Some(source)),
+                "{source}"
+            );
+        }
+        assert_eq!(without_artwork_presentation("Song [Audio HQ]"), "Song");
+        for source in [
+            "Artist - Song (Live Music Video)",
+            "Artist - Song (Remix) (Official Music Video)",
+            "Artist - Song (Part 5) [Audio HQ]",
+        ] {
+            assert!(
+                !artwork_source_matches("Artist", "Song", None, Some(source)),
+                "{source}"
+            );
+        }
+        assert_eq!(without_artwork_presentation("Music"), "Music");
+        assert_eq!(
+            without_artwork_presentation("Song (Unknown Version)"),
+            "Song (Unknown Version)"
+        );
+    }
+
+    #[test]
+    fn production_credits_do_not_block_verified_artwork_identity() {
+        for source in [
+            "Capital STEEZ - Free The Robots [Prod. by Free The Robots]",
+            "Capital STEEZ - Free The Robots (Produced by Free The Robots)",
+            "Capital STEEZ - Free The Robots Prod. Free The Robots",
+        ] {
+            assert!(
+                artwork_source_matches("Capital STEEZ", "Free the Robots", None, Some(source)),
+                "{source}"
+            );
+        }
+        for source in [
+            "Capital STEEZ - Free The Robots [Prod. by Other (Remix)]",
+            "Capital STEEZ - Free The Robots Prod. Producer - Extended Version",
+            "Capital STEEZ - Free The Robots [Prod. by Producer (Unknown Version)]",
+            "Capital STEEZ - Free The Robots [Prod. by Producer (Part 5)]",
+            "Capital STEEZ - Free The Robots [Live]",
+            "Capital STEEZ - Free The Robots [Unknown Version]",
+        ] {
+            assert!(
+                !artwork_source_matches("Capital STEEZ", "Free the Robots", None, Some(source)),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_evidence_requires_the_requested_variant_and_feature() {
+        assert!(artwork_source_matches(
+            "Fabolous",
+            "Throw It In the Bag (Remix) (feat. Drake)",
+            None,
+            Some("Fabolous- Throw It in the Bag rmx ft Drake"),
+        ));
+        assert!(!artwork_source_matches(
+            "Fabolous",
+            "Throw It In the Bag (feat. The-Dream)",
+            None,
+            Some("Fabolous- Throw It in the Bag rmx ft Drake"),
+        ));
+        assert!(artwork_source_matches(
+            "Denzel Curry",
+            "Threatz (Chopped Not Slopped) (feat. Yung Simmie & Robb Bank$)",
+            Some(std::path::Path::new(
+                "00 - Threatz (Chopped Not Slopped) (feat. Yung Simmie & Robb Bank$).mp3",
+            )),
+            Some("Denzel Curry - Threatz (Chopped Not Slopped) (Feat. Yung Simmie & Robb Bank$)"),
+        ));
+        assert!(!artwork_source_matches(
+            "Denzel Curry",
+            "Threatz",
+            None,
+            Some("Denzel Curry - Threatz (Chopped Not Slopped)"),
+        ));
+    }
+
+    #[test]
+    fn source_evidence_requires_filename_when_provenance_is_missing() {
+        assert!(!artwork_source_matches(
+            "Fabolous",
+            "Throw It In the Bag Remix",
+            None,
+            None
+        ));
+        let path = std::env::temp_dir().join("12 - Throw It In the Bag Remix (feat. Drake).mp3");
+        assert!(!artwork_source_matches(
+            "Fabolous",
+            "Throw It In the Bag Remix (feat. Drake)",
+            Some(&path),
+            None,
+        ));
+    }
+
+    #[test]
+    fn source_proof_rejects_wrong_song_remixer_part_feature_and_artist() {
+        assert!(!artwork_source_matches(
+            "Artist",
+            "Song A",
+            None,
+            Some("Artist - Song B")
+        ));
+        assert!(!artwork_source_matches(
+            "Artist",
+            "Song (Ekali Remix)",
+            None,
+            Some("Artist - Song (Other Remix)")
+        ));
+        assert!(!artwork_source_matches(
+            "Artist",
+            "Song (Part 5)",
+            None,
+            Some("Artist - Song (Part 2)")
+        ));
+        assert!(!artwork_source_matches(
+            "Fabolous",
+            "Throw It In the Bag (feat. Drake)",
+            None,
+            Some("Fabolous - Throw It In the Bag")
+        ));
+        assert!(!artwork_source_matches(
+            "Fabolous",
+            "Song",
+            None,
+            Some("Other Artist - Song")
+        ));
+        assert!(!artwork_source_matches(
+            "Artist",
+            "Love Hate",
+            None,
+            Some("Artist - Hate Love")
+        ));
+        assert!(artwork_source_matches(
+            "東京",
+            "大阪",
+            None,
+            Some("東京 - 大阪")
+        ));
+        assert!(!artwork_source_matches(
+            "東京",
+            "大阪",
+            None,
+            Some("東京 - 京都")
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn malformed_or_symlink_sidecars_never_authorize_a_fill() {
+        let root =
+            std::env::temp_dir().join(format!("needle-artwork-evidence-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        let path = root.join("Song.mp3");
+        let sidecar = root.join("Song.json");
+        std::fs::write(&sidecar, b"not json").unwrap();
+        assert!(!artwork_source_matches("Artist", "Song", Some(&path), None));
+        let target = root.join("source.json");
+        std::fs::write(&target, br#"{"selected_source":{"title":"Artist - Song"}}"#).unwrap();
+        std::fs::remove_file(&sidecar).unwrap();
+        std::os::unix::fs::symlink(&target, &sidecar).unwrap();
+        assert!(!artwork_source_matches("Artist", "Song", Some(&path), None));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

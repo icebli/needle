@@ -12,7 +12,7 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 const DISCOVERY_ADDRESS: &str = "127.0.0.1:29879";
 const MAX_BODY_BYTES: usize = 256 * 1024;
 const MAX_QUERY_CHARS: usize = 200;
-const MAX_ARTISTS: usize = 20;
+const MAX_ARTISTS: usize = 100;
 const MAX_TRACKS: usize = 10;
 const REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 const SERVER_IDLE_TIMEOUT: Duration = Duration::from_secs(35);
@@ -526,6 +526,29 @@ fn now_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_one_hundred_artists_and_rejects_oversized_results() {
+        let mut response = DiscoveryResponse {
+            ok: true,
+            artists: Some(
+                (0..100)
+                    .map(|index| DiscoveryArtist {
+                        id: format!("artist-{index}"),
+                        name: format!("Artist {index}"),
+                        uri: format!("spotify:artist:{index}"),
+                        image_url: None,
+                    })
+                    .collect(),
+            ),
+            tracks: None,
+            error: None,
+        };
+        assert!(validate_result(&response, "top-artists").is_ok());
+        let artist = response.artists.as_ref().unwrap()[0].clone();
+        response.artists.as_mut().unwrap().push(artist);
+        assert!(validate_result(&response, "top-artists").is_err());
+    }
 
     #[test]
     fn validates_supported_requests_and_bounds_queries() {

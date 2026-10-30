@@ -18,7 +18,7 @@ The Mac installer includes its audio tools. You do not need Rust, Xcode, Homebre
 
 ## Save your first recording
 
-1. In **Add Music**, enter the artist and song title. Use the optional album hint or source link when needed.
+1. In **Add Music**, enter the artist and song title, or paste an exact source link under **Album hint or exact source link**. A source link works on its own. Needle detects missing artist and title details before finding recordings. Use **Change request** to correct them before approving a source.
 2. Choose **Find recordings**.
 3. Review the source title, duration, views, and source bitrate. **Unknown** means the provider did not report a value. **Check source quality** can retrieve missing bitrate information.
 4. Use **Preview** to listen inside Needle and scrub through the recording. Previewing does not save the track to your collection.
@@ -42,20 +42,26 @@ Preview controls include a full-track scrubber, ten-second jumps, and **Skip int
 
 Open **Discover** and choose **Spotify → Spotify setup…** to enable or update Needle’s bundled companion. [Spicetify](https://spicetify.app/) must already be installed; enabling the companion restarts Spotify and preserves your other extensions.
 
-1. Open Spotify and choose **Spotify → Sync top artists**. Needle reads your top 20 artists over approximately six months and saves the artist list locally.
-2. Open **Choose artists**, select up to five artists and choose **Find recordings**. Needle searches your configured sources and ranks the returned uploads by reported plays/views, skipping recordings already saved in Library.
+1. Open Spotify and choose **Spotify → Sync top artists**. Needle reads up to 100 of your top artists over approximately six months and saves the artist list locally.
+2. Open **Choose artists**, select artists or use **Select all**, then choose **Find recordings**. Needle searches your configured sources and ranks the returned uploads by reported plays/views, skipping recordings already saved in Library.
 3. Check each catalog status. **No exact match on Spotify** means no exact artist/title match appeared in this search; regional availability and alternate titles can affect results. **Spotify availability unknown** means the lookup failed, not that the song is absent. Exact matches are hidden under **All recordings**.
 4. Choose **Preview & review**, listen in Review Queue, check artist/title hints and version details, then approve the exact source for download.
 
 If a result says **Spotify availability unknown**, its check failed; this does not mean the recording is absent. Keep Spotify open, enable or update the companion, then choose **Retry check**. A completed check can report a match or no exact match. Found recordings offer **Open in Spotify**.
 
-Searches share a budget of up to 45 source candidates across the selected artists. Choose one artist for a deeper search. This is a bounded discovery list, not a complete ranking of every recording. **Stop** keeps completed results. If Spotify rate-limits a request, Needle reports the failure and stops catalog checks instead of treating it as an empty catalog. Spotify and Spicetify updates may require updating the companion.
+Searches share a budget of 45 source candidates across the selected artists, with at least one candidate per selected artist when you select more than 45. Choose one artist for a deeper search. This is a bounded discovery list, not a complete ranking of every recording. **Stop** keeps completed results. If Spotify rate-limits a request, Needle reports the failure and stops catalog checks instead of treating it as an empty catalog. Spotify and Spicetify updates may require updating the companion.
+
+## Fill missing covers automatically
+
+Needle checks existing bookmarks and saved tracks for missing covers when the app opens and after library refreshes. Catalog matches must preserve the artist, full recording title and version, and the saved album when present. Before lookup, Needle checks source titles, filenames, and available provenance for conflicts with the saved tags. A missing remix qualifier or feature credit blocks automatic artwork until the identity is corrected. Files without independent source evidence also stay blank; matching tags and a filename alone cannot establish the recording. Source upload thumbnails remain separate from album covers.
+
+In **Bookmarks** or **Library**, use **Find missing covers** to retry immediately. **Stop** pauses the background pass. Missing matches retry after six hours, and temporary provider failures retry after fifteen minutes while Needle remains open. Existing embedded covers and artwork you explicitly clear during metadata review are preserved. Local file changes create an undo backup without downloading or converting the audio. Spotify may need to refresh Local Files before showing a newly embedded cover.
 
 ## Repair a saved recording
 
 In **Library**, choose **Repair**. Needle reads the file's actual tags and embedded artwork. Edit artist, title, or album; use **Remove album** to clear it explicitly. You can choose an image, find artwork from the original source, or request metadata suggestions. Preview suggestions before applying them, especially for remixes and live recordings.
 
-**Apply changes** updates the existing file without downloading or converting its audio. Needle creates a backup first and offers **Reveal backup** after saving. Spotify may need to refresh Local Files to display updated tags or artwork. Use **Add to Spotify** on the saved recording to retry delivery without downloading again.
+**Apply changes** updates the existing file without downloading or converting its audio. Needle creates a backup first and offers **Reveal backup** after saving. After repairs, missing-cover fills, and Library scans, Needle automatically updates previously delivered Spotify entries. It waits for Spotify to index the changed file and confirms the updated entry before removing the old one, preserving playlist position and count. Missing or ambiguous entries need your attention; check the Spotify status before retrying. Spotify may keep showing cached artwork even after the update is confirmed. For recordings not yet delivered, use **Add to Spotify** without downloading again.
 
 ## Listen in Spotify
 

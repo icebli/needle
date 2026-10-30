@@ -274,3 +274,177 @@ test("waits for Spotify to expose a newly added local track before acknowledging
   assert.equal(adds, 1);
   assert.equal(reads, 3);
 });
+
+const row = (uri, uid) => ({ uri, uid });
+function repairFixture(options = {}) {
+  const old = row("spotify:local:Artist:Album:Old:190", "old-row");
+  const current = { ...local("Artist", "Current", "spotify:local:Artist:Album:Current:190"), album: { name: "Album", artist: { name: "Artist" } }, duration: { milliseconds: 190000 } };
+  let rows = options.rows || [row("spotify:track:first", "first"), old, row("spotify:track:last", "last")];
+  const job = { id: "repair", revision: 2, tracks: [{ artist: "Artist", name: "Current", album: "Album", durationMs: 190000 }], reconcile: {
+    target: { playlistUri: "spotify:playlist:exact-receipt", addedUri: old.uri, addedUid: options.preciseUID ? old.uid : null }, mutation: null,
+  } };
+  const messages = [], acknowledgements = [], calls = [];
+  const io = {
+    progress: async (_id, detail) => messages.push(detail),
+    done: async (...args) => acknowledgements.push(args),
+    checkpoint: async (_job, mutation) => { job.reconcile.mutation = structuredClone(mutation); },
+    currentJob: async () => structuredClone(job),
+  };
+  const api = {
+    getContents: async (uri, range) => { assert.equal(uri, job.reconcile.target.playlistUri); assert.equal(range.limit, 200); return { items: rows, totalLength: rows.length }; },
+    add: async (_uri, uris, position) => { calls.push("add"); const index = rows.findIndex((item) => item.uid === position.before.uid); rows.splice(index, 0, row(uris[0], "replacement")); },
+    remove: async (_uri, items) => { calls.push("remove"); assert.ok(items[0].uid); rows = rows.filter((item) => item.uid !== items[0].uid); },
+    resync: async () => calls.push("resync"),
+  };
+  return { old, current, job, io, api, messages, acknowledgements, calls, rows: () => rows, run: () => companion.reconcileJob(api, [current], job, io) };
+}
+
+test("replacement waits for exact current tags and rejects stale normalized metadata", async () => {
+  const f = repairFixture();
+  const stale = { ...f.current, name: "CURRENT" };
+  assert.equal(await companion.reconcileJob(f.api, [stale], f.job, f.io), false);
+  assert.deepEqual(f.calls, []);
+  assert.match(f.messages[0], /index.*current/);
+  assert.equal(await f.run(), true);
+  assert.deepEqual(f.calls, ["add", "remove"]);
+  assert.deepEqual(f.rows().map((item) => item.uid), ["first", "replacement", "last"]);
+});
+
+test("case changes choose exact metadata and duplicate exact local recordings wait", () => {
+  const f = repairFixture();
+  const stale = { ...f.current, name: "CURRENT", uri: "spotify:local:stale:190" };
+  assert.equal(companion.currentMetadataMatch([stale, f.current], f.job.tracks[0]), f.current);
+  assert.equal(companion.currentMetadataMatch([f.current, { ...f.current, uri: "spotify:local:other:190" }], f.job.tracks[0]), null);
+});
+
+test("duplicate old URI without exact receipt UID never changes the playlist", async () => {
+  const f = repairFixture();
+  const duplicate = row(f.old.uri, "other-occurrence");
+  f.rows().push(duplicate);
+  assert.equal(await f.run(), false);
+  assert.deepEqual(f.calls, []);
+  assert.match(f.messages[0], /ambiguous/);
+});
+
+test("known old UID replaces only that occurrence and preserves duplicates", async () => {
+  const f = repairFixture({ preciseUID: true });
+  f.rows().push(row(f.old.uri, "other-occurrence"));
+  assert.equal(await f.run(), true);
+  assert.deepEqual(f.rows().map((item) => item.uid), ["first", "replacement", "last", "other-occurrence"]);
+});
+
+test("lost add response resumes after restart without adding a duplicate", async () => {
+  const f = repairFixture();
+  const add = f.api.add;
+  f.api.add = async (...args) => { await add(...args); throw new Error("response lost"); };
+  assert.equal(await f.run(), false);
+  assert.deepEqual(f.calls, ["add"]);
+  f.job.reconcile = JSON.parse(JSON.stringify(f.job.reconcile));
+  assert.equal(await f.run(), true);
+  assert.deepEqual(f.calls, ["add", "remove"]);
+  assert.equal(f.rows().length, 3);
+});
+
+test("uncertain insert without visible replacement never retries add or removes old", async () => {
+  const f = repairFixture();
+  f.api.add = async () => { f.calls.push("add"); throw new Error("disconnected"); };
+  assert.equal(await f.run(), false);
+  assert.equal(await f.run(), false);
+  assert.deepEqual(f.calls, ["add"]);
+  assert.ok(f.rows().some((item) => item.uid === f.old.uid));
+});
+
+test("lost remove response confirms persisted final state after restart", async () => {
+  const f = repairFixture();
+  const remove = f.api.remove;
+  f.api.remove = async (...args) => { await remove(...args); throw new Error("response lost"); };
+  assert.equal(await f.run(), false);
+  assert.equal(await f.run(), true);
+  assert.deepEqual(f.calls, ["add", "remove"]);
+  assert.equal(f.acknowledgements.length, 1);
+});
+
+test("failed removal can retry only the original exact UID", async () => {
+  const f = repairFixture();
+  const remove = f.api.remove;
+  let fail = true;
+  f.api.remove = async (...args) => { if (fail) { fail = false; throw new Error("unavailable"); } await remove(...args); };
+  assert.equal(await f.run(), false);
+  assert.equal(f.rows().length, 4);
+  assert.equal(await f.run(), true);
+  assert.deepEqual(f.calls, ["add", "remove"]);
+});
+
+test("missing original and current entries never resurrect a user-removed track", async () => {
+  const f = repairFixture({ rows: [] });
+  assert.equal(await f.run(), false);
+  assert.deepEqual(f.calls, []);
+  assert.match(f.messages[0], /will not add it again/);
+});
+
+test("manual replacement already in playlist acknowledges without mutation", async () => {
+  const f = repairFixture();
+  f.rows().splice(1, 1, row(f.current.uri, "manual-current"));
+  assert.equal(await f.run(), true);
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.acknowledgements[0][3].addedUid, "manual-current");
+});
+
+test("both old and preexisting new rows remain untouched without an owned insert plan", async () => {
+  const f = repairFixture();
+  f.rows().push(row(f.current.uri, "preexisting"));
+  assert.equal(await f.run(), false);
+  assert.deepEqual(f.calls, []);
+});
+
+test("external playlist edits prevent deletion after the replacement was inserted", async () => {
+  const f = repairFixture();
+  const add = f.api.add;
+  f.api.add = async (...args) => { await add(...args); f.rows().push(row("spotify:track:external", "external")); };
+  assert.equal(await f.run(), false);
+  assert.deepEqual(f.calls, ["add"]);
+  assert.ok(f.rows().some((item) => item.uid === f.old.uid));
+});
+
+test("generation change immediately before removal prevents deletion", async () => {
+  const f = repairFixture();
+  f.io.currentJob = async () => { throw new Error("new revision"); };
+  await assert.rejects(f.run(), /new revision/);
+  assert.deepEqual(f.calls, ["add"]);
+  assert.ok(f.rows().some((item) => item.uid === f.old.uid));
+});
+
+test("artwork-only unchanged URI preserves row and reports refresh unconfirmed", async () => {
+  const f = repairFixture();
+  f.current.uri = f.old.uri;
+  assert.equal(await f.run(), true);
+  assert.deepEqual(f.calls, ["resync"]);
+  assert.match(f.acknowledgements[0][3].detail, /artwork refresh is unconfirmed/);
+});
+
+test("incomplete playlist read and missing destination never mutate anything", async () => {
+  const f = repairFixture();
+  f.api.getContents = async () => ({ items: f.rows(), totalLength: 100 });
+  await assert.rejects(f.run(), /incomplete/);
+  delete f.job.reconcile.target;
+  assert.equal(await f.run(), false);
+  assert.deepEqual(f.calls, []);
+});
+
+test("playlist pagination advances requested offsets and retains every duplicate occurrence", async () => {
+  const rows = Array.from({ length: 405 }, (_, index) => row(`spotify:local:same`, `row-${index}`));
+  const offsets = [];
+  const api = { getContents: async (_uri, { offset, limit }) => {
+    offsets.push(offset);
+    return { items: rows.slice(offset, offset + limit), offset: 0, totalLength: rows.length };
+  } };
+  assert.deepEqual(await companion.playlistItems(api, "spotify:playlist:paged", true), rows);
+  assert.deepEqual(offsets, [0, 200, 400]);
+});
+
+test("duplicate pages and changing playlist totals are rejected before mutation", async () => {
+  const rows = Array.from({ length: 200 }, (_, index) => row("spotify:track:one", `row-${index}`));
+  await assert.rejects(companion.playlistItems({ getContents: async () => ({ items: rows, totalLength: 400 }) }, "spotify:playlist:repeat", true), /incomplete|changing/);
+  let reads = 0;
+  await assert.rejects(companion.playlistItems({ getContents: async () => ({ items: rows, totalLength: ++reads === 1 ? 400 : 401 }) }, "spotify:playlist:changing", true), /changing/);
+});

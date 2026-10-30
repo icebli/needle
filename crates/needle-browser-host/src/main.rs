@@ -8,8 +8,8 @@ fn main() -> Result<()> {
         Some("discover") => {
             needle_browser_host::discovery::run_discovery_command(&args.collect::<Vec<_>>())
         }
-        Some("enqueue") => needle_browser_host::run_desktop_command(
-            "enqueue",
+        Some(command @ ("enqueue" | "reconcile")) => needle_browser_host::run_desktop_command(
+            command,
             std::io::stdin().lock(),
             std::io::stdout().lock(),
         ),

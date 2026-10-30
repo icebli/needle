@@ -51,7 +51,7 @@ actor SpotifyDiscoveryService {
     func topArtists() async throws -> [SpotifyArtist] {
         let result = try await request(["top-artists"])
         guard let artists = result.artists else { throw CLIError.message("Spotify returned no artist list.") }
-        return Array(artists.prefix(20))
+        return Array(artists.prefix(100))
     }
 
     func catalog(artist: String, title: String) async throws -> [SpotifyCatalogTrack] {

@@ -53,22 +53,27 @@ final class DiscoveryStore {
         }
     }
 
-    func find(settings: NeedleSettings, library: [TrackRequest]) {
+    func find(settings: NeedleSettings, library: [TrackRequest], sourceLookup: ((String) async throws -> [Candidate])? = nil) {
         guard !isSearching, !isSyncing else { return }
-        let selection = Array(artists.filter { selectedArtistIDs.contains($0.id) }.prefix(5))
-        guard !selection.isEmpty else { error = "Select up to five artists to search."; return }
+        let selection = artists.filter { selectedArtistIDs.contains($0.id) }
+        guard !selection.isEmpty else { error = "Select artists to search."; return }
         isSearching = true; hasSearched = true; error = nil; catalogNotice = nil; warnings = []; recordings = []
         task = Task {
             defer { isSearching = false; progress = ""; persist() }
             var seen = Set<String>()
             var sourceFailures: [String] = []
-            for artist in selection {
+            for (artistIndex, artist) in selection.enumerated() {
                 guard !Task.isCancelled else { return }
-                progress = "Finding popular uploads for \(artist.name)…"
+                progress = "Artist \(artistIndex + 1)/\(selection.count): finding popular uploads for \(artist.name)…"
                 struct Sources: Decodable { let ok: Bool; let candidates: [Candidate]; let warnings: [String]? }
                 do {
-                    let data = try await cli.runJSONCommand(["discover", artist.name, "--json", "--source", settings.provider], settings: settings)
-                    let response = try NeedleCLIService.parseLastJSON(Sources.self, data: data)
+                    let response: Sources
+                    if let sourceLookup {
+                        response = Sources(ok: true, candidates: try await sourceLookup(artist.name), warnings: nil)
+                    } else {
+                        let data = try await cli.runJSONCommand(["discover", artist.name, "--json", "--source", settings.provider], settings: settings)
+                        response = try NeedleCLIService.parseLastJSON(Sources.self, data: data)
+                    }
                     guard response.ok else { throw CLIError.message("Source search failed for \(artist.name).") }
                     warnings.append(contentsOf: response.warnings ?? [])
                     for candidate in response.candidates.prefix(Self.candidateLimit(artistCount: selection.count)) {
@@ -79,7 +84,7 @@ final class DiscoveryStore {
                               !seen.contains(key),
                               !DiscoveryMatching.isInLibrary(candidate: candidate, artist: artist.name, title: title, tracks: library) else { continue }
                         seen.insert(key)
-                        progress = "Checking Spotify: \(artist.name) — \(title)"
+                        progress = "Artist \(artistIndex + 1)/\(selection.count): checking Spotify — \(artist.name) — \(title)"
                         var result = DiscoveryRecording(artist: artist, title: title, candidate: candidate, availability: .unknown)
                         do {
                             let tracks = try await spotify.catalog(artist: artist.name, title: title)
@@ -189,7 +194,7 @@ final class DiscoveryStore {
     }
 
     static func candidateLimit(artistCount: Int) -> Int {
-        45 / max(1, min(artistCount, 5))
+        max(1, 45 / max(1, artistCount))
     }
 
     func cancel() {

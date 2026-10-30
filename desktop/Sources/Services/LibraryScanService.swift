@@ -5,6 +5,7 @@ final class LibraryScanService {
     struct ResultSummary {
         let imported: Int
         let warnings: [String]
+        let spotifyUpdates: [(previous: TrackRequest, current: TrackRequest)]
     }
 
     private let cli: NeedleCLIService
@@ -14,8 +15,15 @@ final class LibraryScanService {
         do {
             let response = try await cli.scanLibrary(root: root.path, settings: settings).get()
             let tracks = response.tracks.compactMap(Self.track(from:))
+            let previous = history.tracks
             let imported = history.mergeLibraryTracks(tracks)
-            return .success(ResultSummary(imported: imported, warnings: response.warnings))
+            let updates = previous.compactMap { old -> (previous: TrackRequest, current: TrackRequest)? in
+                guard old.spotifyJobID != nil, let path = old.savedPath,
+                      tracks.contains(where: { $0.savedPath == path }),
+                      let current = history.tracks.first(where: { $0.id == old.id }) else { return nil }
+                return (old, current)
+            }
+            return .success(ResultSummary(imported: imported, warnings: response.warnings, spotifyUpdates: updates))
         } catch { return .failure(error) }
     }
 

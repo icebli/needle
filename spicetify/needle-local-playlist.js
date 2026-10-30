@@ -52,7 +52,7 @@
     const expectedSeconds = Math.floor(durationMs / 1000);
     const uriSeconds = durationSecondsFromURI(track?.uri);
     if (uriSeconds !== null) return uriSeconds === expectedSeconds;
-    const localDuration = Number(track?.duration ?? track?.duration_ms ?? track?.durationMs);
+    const localDuration = Number(track?.duration?.milliseconds ?? track?.duration ?? track?.duration_ms ?? track?.durationMs);
     return Number.isFinite(localDuration) && Math.floor(localDuration / 1000) === expectedSeconds;
   }
 
@@ -160,11 +160,11 @@
     } catch (_) {}
   }
 
-  async function markDone(jobId, playlistUri, addedUri) {
+  async function markDone(jobId, playlistUri, addedUri, extra = {}) {
     const response = await fetch(`${QUEUE_SERVER}/done`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId, playlistUri, addedUri }),
+      body: JSON.stringify({ jobId, playlistUri, addedUri, ...extra }),
     });
     if (!response.ok) throw new Error(`Needle could not acknowledge Spotify delivery (${response.status})`);
   }
@@ -235,9 +235,32 @@
     return uri;
   }
 
-  async function playlistItems(PlaylistAPI, uri) {
-    const response = await PlaylistAPI.getContents(uri);
-    return response?.items || response?.contents?.items || response?.rows || [];
+  async function playlistItems(PlaylistAPI, uri, requireComplete = false) {
+    const rows = [];
+    const seen = new Set();
+    let expectedTotal;
+    for (let page = 0; page < 1000; page += 1) {
+      const response = await PlaylistAPI.getContents(uri, { offset: rows.length, limit: 200 });
+      const items = response?.items || response?.contents?.items || response?.rows || [];
+      const total = response?.totalLength;
+      if (!Number.isInteger(total) || total < 0) {
+        if (!requireComplete && rows.length === 0 && items.length < 200) return items;
+        throw new Error("Spotify did not confirm the complete playlist length");
+      }
+      if (expectedTotal === undefined) expectedTotal = total;
+      if (expectedTotal !== total || (!items.length && rows.length < total)
+        || items.some((row) => requireComplete && (!row.uid || seen.has(row.uid)))) {
+        throw new Error("Spotify returned an incomplete or changing playlist; waiting before changing any rows");
+      }
+      for (const row of items) {
+        if (requireComplete && seen.has(row.uid)) throw new Error("Spotify repeated a playlist row during pagination");
+        if (row.uid) seen.add(row.uid);
+        rows.push(row);
+      }
+      if (rows.length === expectedTotal) return rows;
+      if (rows.length > expectedTotal) break;
+    }
+    throw new Error("Spotify returned an incomplete playlist; waiting before changing any rows");
   }
 
   async function confirmPlaylistAddition(
@@ -267,7 +290,118 @@
     return false;
   }
 
+  function currentMetadataMatch(localTracks, requested) {
+    const matches = localTracks.filter((track) => track?.uri
+      && artistFromLocal(track) === requested.artist
+      && track.name === requested.name
+      && albumFromLocal(track) === (requested.album || "")
+      && requested.durationMs != null && durationMatches(track, requested.durationMs));
+    const distinct = matches.filter((track, index) => matches.findIndex((other) => other.uri === track.uri) === index);
+    return distinct.length === 1 ? distinct[0] : null;
+  }
+
+  const rowsOf = (items) => items.map(({ uri, uid }) => ({ uri, uid }));
+  const sameRows = (left, right) => left.length === right.length
+    && left.every((row, index) => row.uri === right[index]?.uri && row.uid === right[index]?.uid);
+
+  async function currentJob(job) {
+    const response = await fetch(`${QUEUE_SERVER}/queue?protocol=2`);
+    if (!response.ok) throw new Error("Needle could not verify the current repair job");
+    const jobs = await response.json();
+    const current = jobs.find((item) => item.id === job.id && item.revision === job.revision);
+    if (!current) throw new Error("Metadata changed again; waiting for the current repair job");
+    return current;
+  }
+
+  async function checkpoint(job, mutation) {
+    const response = await fetch(`${QUEUE_SERVER}/checkpoint`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: job.id, revision: job.revision, mutation }),
+    });
+    if (!response.ok) throw new Error("Metadata changed again; this repair will resume from its saved state");
+    job.reconcile.mutation = mutation;
+  }
+
+  async function reconcileJob(PlaylistAPI, localTracks, job, io = {}) {
+    const progress = io.progress || reportProgress;
+    const done = io.done || markDone;
+    const persist = io.checkpoint || checkpoint;
+    const refresh = io.currentJob || currentJob;
+    const wait = async (detail) => { await progress(job.id, detail); return false; };
+    const target = job.reconcile?.target;
+    const requested = job.tracks?.[0];
+    if (!target?.playlistUri?.startsWith("spotify:playlist:") || !target.addedUri?.startsWith("spotify:local:") || !requested) {
+      return wait("Spotify's original playlist receipt is missing. No playlist was changed.");
+    }
+    let mutation = job.reconcile.mutation;
+    const local = mutation ? { uri: mutation.newUri } : currentMetadataMatch(localTracks, requested);
+    if (!local) return wait("Waiting for Spotify to index the file's current artist, title, album, and duration. The existing playlist entry is preserved.");
+    let rows = rowsOf(await playlistItems(PlaylistAPI, target.playlistUri, true));
+    const finish = async (row, detail) => {
+      await done(job.id, target.playlistUri, row.uri, { revision: job.revision, addedUid: row.uid || null, detail });
+      return true;
+    };
+    if (!mutation && local.uri === target.addedUri) {
+      const matches = rows.filter((row) => row.uri === local.uri && (!target.addedUid || row.uid === target.addedUid));
+      if (matches.length !== 1) return wait("The original Spotify row is missing or ambiguous. No playlist was changed.");
+      await refresh(job);
+      if (PlaylistAPI.resync) await PlaylistAPI.resync(target.playlistUri);
+      return finish(matches[0], "Current tags use the same Spotify URI. The playlist entry is preserved; Spotify artwork refresh is unconfirmed.");
+    }
+    if (!mutation) {
+      const oldRows = rows.filter((row) => row.uri === target.addedUri);
+      const old = target.addedUid ? oldRows.find((row) => row.uid === target.addedUid) : oldRows.length === 1 ? oldRows[0] : null;
+      const currentRows = rows.filter((row) => row.uri === local.uri);
+      if (!old && oldRows.length === 0) {
+        if (currentRows.length === 1) { await refresh(job); return finish(currentRows[0], "The playlist already contains the current recording."); }
+        return wait("The original playlist entry was removed. Needle will not add it again.");
+      }
+      if (!old?.uid || rows.some((row) => !row.uid)) return wait("Spotify's original playlist row is ambiguous or has no row ID. No playlist was changed.");
+      if (currentRows.length) return wait("The playlist contains both old and current recordings. Needle needs an unambiguous row before replacing anything.");
+      mutation = { phase: "adding", oldUid: old.uid, newUri: local.uri, newUid: null, originalRows: rows };
+      await persist(job, mutation);
+      // A persisted adding phase makes a lost response distinguishable from a
+      // fresh request. Retries inspect the playlist and never repeat this add.
+      try { await PlaylistAPI.add(target.playlistUri, [local.uri], { before: { uid: old.uid } }); }
+      catch (_) { return wait("Spotify did not confirm the replacement insert. Needle will inspect this same repair. Manual review is needed if no replacement appears; it will not add another copy."); }
+      rows = rowsOf(await playlistItems(PlaylistAPI, target.playlistUri, true));
+    }
+    const original = mutation.originalRows;
+    const oldIndex = original.findIndex((row) => row.uid === mutation.oldUid && row.uri === target.addedUri);
+    if (oldIndex < 0) return wait("The saved replacement plan is invalid. No playlist row was removed.");
+    const originalUIDs = new Set(original.map((row) => row.uid));
+    const newRows = rows.filter((row) => row.uri === mutation.newUri && row.uid && !originalUIDs.has(row.uid)
+      && (!mutation.newUid || row.uid === mutation.newUid));
+    if (newRows.length !== 1) return wait("Spotify has not confirmed the exact replacement row. If it never appears, review the playlist manually; Needle will not insert another copy or remove the original.");
+    const replacement = newRows[0];
+    const expectedFinal = original.map((row, index) => index === oldIndex ? replacement : row);
+    if (sameRows(rows, expectedFinal)) {
+      await refresh(job);
+      if (!mutation.newUid) { mutation = { ...mutation, phase: "removing", newUid: replacement.uid }; await persist(job, mutation); }
+      return finish(replacement, "Spotify now uses the file's current tags. Spotify artwork refresh is unconfirmed.");
+    }
+    const expectedInserted = [...original.slice(0, oldIndex), replacement, ...original.slice(oldIndex)];
+    if (!sameRows(rows, expectedInserted)) return wait("The playlist changed during repair. Needle preserved every row and is waiting for review.");
+    mutation = { ...mutation, phase: "inserted", newUid: replacement.uid };
+    await persist(job, mutation);
+    const current = await refresh(job);
+    if (current.reconcile?.target?.addedUri !== target.addedUri
+      || current.reconcile?.mutation?.newUid !== replacement.uid) throw new Error("The repair target changed before removal");
+    rows = rowsOf(await playlistItems(PlaylistAPI, target.playlistUri, true));
+    if (!sameRows(rows, expectedInserted)) return wait("The playlist changed before removal. The original entry is preserved.");
+    mutation = { ...mutation, phase: "removing" };
+    await persist(job, mutation);
+    // UID is mandatory: Spotify removes every occurrence when it falls back
+    // to URI removal. The exact replacement row was confirmed above.
+    try { await PlaylistAPI.remove(target.playlistUri, [{ uri: target.addedUri, uid: mutation.oldUid }]); }
+    catch (_) { return wait("Spotify did not confirm removal. Needle will check this saved replacement again."); }
+    rows = rowsOf(await playlistItems(PlaylistAPI, target.playlistUri, true));
+    if (!sameRows(rows, expectedFinal)) return wait("Waiting for Spotify to confirm the replacement and unchanged playlist order.");
+    return finish(replacement, "Spotify now uses the file's current tags. Spotify artwork refresh is unconfirmed.");
+  }
+
   async function processJob(Spicetify, PlaylistAPI, localTracks, job) {
+    if (job.reconcile) { await reconcileJob(PlaylistAPI, localTracks, job); return; }
     const requested = job?.tracks?.[0];
     if (!requested) {
       await markDone(job.id, null, null);
@@ -301,7 +435,9 @@
       }
       added = true;
     }
-    await markDone(job.id, playlistUri, local.uri);
+    const confirmedRows = await playlistItems(PlaylistAPI, playlistUri);
+    const matchingRows = confirmedRows.filter((row) => row.uri === local.uri);
+    await markDone(job.id, playlistUri, local.uri, { addedUid: matchingRows.length === 1 ? matchingRows[0].uid || null : null });
     missingAttempts.delete(job.id);
     missingReasons.delete(job.id);
     const message = added
@@ -340,7 +476,7 @@
       try {
         let queue;
         try {
-          const response = await fetch(`${QUEUE_SERVER}/queue`);
+          const response = await fetch(`${QUEUE_SERVER}/queue?protocol=2`);
           if (!response.ok) return;
           queue = await response.json();
         } catch (_) {
@@ -375,10 +511,14 @@
 
     await log("info", "Needle playlist companion initialized");
     await poll();
+    LocalFilesAPI.getEvents?.().addListener?.("update", poll);
     setInterval(poll, POLL_INTERVAL_MS);
   }
 
   return {
+    currentMetadataMatch,
+    reconcileJob,
+    playlistItems,
     ensurePlaylist,
     confirmPlaylistAddition,
     findLocalTrack,

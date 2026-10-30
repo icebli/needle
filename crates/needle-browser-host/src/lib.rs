@@ -94,9 +94,9 @@ struct NeedleOutput {
     source_url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct QueueTrack {
+pub struct QueueTrack {
     name: String,
     artist: String,
     album: Option<String>,
@@ -104,6 +104,8 @@ struct QueueTrack {
     saved_path: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +115,67 @@ struct QueueJob {
     playlist_name: String,
     tracks: Vec<QueueTrack>,
     created_at_unix: u64,
+    #[serde(default)]
+    revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reconcile: Option<ReconcileState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReconcileState {
+    source_job_id: String,
+    target: Option<ReconcileTarget>,
+    mutation: Option<ReplacementMutation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReconcileTarget {
+    playlist_uri: String,
+    added_uri: String,
+    added_uid: Option<String>,
+    track: QueueTrack,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplacementMutation {
+    phase: ReplacementPhase,
+    old_uid: String,
+    new_uri: String,
+    new_uid: Option<String>,
+    original_rows: Vec<PlaylistRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum ReplacementPhase {
+    Adding,
+    Inserted,
+    Removing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlaylistRow {
+    uri: String,
+    uid: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopReconcileRequest {
+    previous_job_id: String,
+    track: QueueTrack,
+    previous_track: QueueTrack,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReconcileCheckpoint {
+    job_id: String,
+    revision: u64,
+    mutation: ReplacementMutation,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -143,6 +206,7 @@ pub struct DesktopStatusResponse {
     pub added_uri: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    pub track: Option<QueueTrack>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +216,16 @@ struct AcknowledgementReceipt {
     playlist_uri: Option<String>,
     added_uri: Option<String>,
     acknowledged_at_unix: u64,
+    #[serde(default)]
+    revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    track: Option<QueueTrack>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    added_uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_job_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +270,7 @@ pub fn run_desktop_command<R: Read, W: Write>(
     }
     let response = match command {
         "enqueue" => serde_json::to_value(enqueue_desktop_job(&body)?)?,
+        "reconcile" => serde_json::to_value(reconcile_desktop_job(&body)?)?,
         "status" => serde_json::to_value(status_desktop_job(body.trim())?)?,
         "resume" => serde_json::to_value(resume_desktop_job(body.trim())?)?,
         _ => bail!("unknown desktop command: {command}"),
@@ -224,14 +299,267 @@ fn enqueue_desktop_job(body: &str) -> Result<DesktopEnqueueResponse> {
             name: title,
             artist,
             album,
+            file_revision: request.saved_path.as_deref().and_then(file_revision),
             saved_path: request.saved_path,
             duration_ms,
         }],
         created_at_unix: unix_timestamp(),
+        revision: 0,
+        reconcile: None,
     };
     let job_id = enqueue_job(job)?;
     ensure_queue_server()?;
     Ok(DesktopEnqueueResponse { ok: true, job_id })
+}
+
+fn file_revision(path: &Path) -> Option<String> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified = metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some(format!("{}:{}", metadata.len(), modified.as_nanos()))
+}
+
+fn reconcile_desktop_job(body: &str) -> Result<DesktopEnqueueResponse> {
+    let mut request: DesktopReconcileRequest = serde_json::from_str(body)?;
+    validate_job_id(&request.previous_job_id)?;
+    request.track.artist = validate_text("artist", request.track.artist)?;
+    request.track.name = validate_text("title", request.track.name)?;
+    let path = request
+        .track
+        .saved_path
+        .as_deref()
+        .ok_or_else(|| anyhow!("reconciliation requires a saved file"))?;
+    if !path.is_file() || request.previous_track.saved_path.as_deref() != Some(path) {
+        bail!("reconciliation requires the same existing saved file");
+    }
+    request.track.duration_ms = probe_duration_ms(path);
+    request.track.file_revision = file_revision(path);
+    let id = reconcile_job(&queue_path()?, &receipt_dir()?, request)?;
+    ensure_queue_server()?;
+    Ok(DesktopEnqueueResponse {
+        ok: true,
+        job_id: id,
+    })
+}
+
+fn target_from_receipt(receipt: &AcknowledgementReceipt) -> Option<ReconcileTarget> {
+    Some(ReconcileTarget {
+        playlist_uri: valid_spotify_uri(receipt.playlist_uri.clone(), "spotify:playlist:")?,
+        added_uri: valid_spotify_uri(receipt.added_uri.clone(), "spotify:local:")?,
+        added_uid: receipt.added_uid.clone(),
+        track: receipt.track.clone()?,
+    })
+}
+
+fn reconcile_job(
+    queue: &Path,
+    receipts: &Path,
+    mut request: DesktopReconcileRequest,
+) -> Result<String> {
+    with_queue_lock(queue, || {
+        let mut jobs = load_queue(queue)?;
+        // Follow completed and pending successors after an interrupted history
+        // write. The receipt chain keeps the original job ID recoverable.
+        let mut completed = Vec::new();
+        if receipts.is_dir() {
+            for entry in fs::read_dir(receipts)? {
+                let path = entry?.path();
+                if path
+                    .extension()
+                    .is_some_and(|extension| extension == "json")
+                {
+                    let receipt: AcknowledgementReceipt = serde_json::from_slice(&fs::read(path)?)?;
+                    completed.push(receipt);
+                }
+            }
+        }
+        let mut visited = std::collections::HashSet::new();
+        loop {
+            if !visited.insert(request.previous_job_id.clone()) {
+                bail!("Spotify receipt lineage is cyclic");
+            }
+            let mut successors: Vec<String> = jobs
+                .iter()
+                .filter(|job| {
+                    job.reconcile
+                        .as_ref()
+                        .is_some_and(|state| state.source_job_id == request.previous_job_id)
+                })
+                .map(|job| job.id.clone())
+                .chain(
+                    completed
+                        .iter()
+                        .filter(|receipt| {
+                            receipt.source_job_id.as_ref() == Some(&request.previous_job_id)
+                        })
+                        .map(|receipt| receipt.job_id.clone()),
+                )
+                .collect();
+            successors.sort();
+            successors.dedup();
+            match successors.as_slice() {
+                [] => break,
+                [next] => request.previous_job_id = next.clone(),
+                _ => bail!(
+                    "Spotify receipt lineage has conflicting successors; no playlist was changed"
+                ),
+            }
+        }
+        if let Some(existing) = jobs
+            .iter_mut()
+            .find(|job| job.id == request.previous_job_id)
+        {
+            if existing
+                .tracks
+                .first()
+                .and_then(|track| track.saved_path.as_ref())
+                != request.track.saved_path.as_ref()
+            {
+                bail!("pending Spotify job belongs to another file");
+            }
+            if existing.tracks.first() == Some(&request.track) {
+                return Ok(existing.id.clone());
+            }
+            // An unstarted replacement can adopt the newest tags. Once mutation
+            // begins its exact rows stay immutable and the successor waits.
+            if existing
+                .reconcile
+                .as_ref()
+                .is_some_and(|state| state.mutation.is_none())
+            {
+                existing.tracks = vec![request.track];
+                existing.revision += 1;
+                let id = existing.id.clone();
+                save_queue(queue, &jobs)?;
+                return Ok(id);
+            }
+        }
+        let target = if let Some(mut receipt) = load_receipt(receipts, &request.previous_job_id)? {
+            if !complete_receipt(&receipt) {
+                bail!("Spotify destination was never confirmed");
+            }
+            if receipt.track.is_none() {
+                // Legacy adoption is allowed only through the exact history job
+                // ID and its same-file snapshot supplied by the desktop app.
+                if request.previous_track.saved_path != request.track.saved_path {
+                    bail!("legacy file association does not match");
+                }
+                receipt.track = Some(request.previous_track.clone());
+                save_receipt(receipts, &receipt)?;
+            }
+            let baseline = receipt
+                .track
+                .as_ref()
+                .ok_or_else(|| anyhow!("missing file association"))?;
+            if baseline.saved_path != request.track.saved_path {
+                bail!("Spotify receipt belongs to another file");
+            }
+            if baseline == &request.track {
+                return Ok(receipt.job_id);
+            }
+            Some(
+                target_from_receipt(&receipt)
+                    .ok_or_else(|| anyhow!("invalid Spotify destination"))?,
+            )
+        } else if jobs.iter().any(|job| job.id == request.previous_job_id) {
+            None
+        } else {
+            bail!("Spotify's original delivery receipt is missing; no playlist was changed");
+        };
+        let id = job_id();
+        jobs.push(QueueJob {
+            id: id.clone(),
+            playlist_name: String::new(),
+            tracks: vec![request.track],
+            created_at_unix: unix_timestamp(),
+            revision: 1,
+            reconcile: Some(ReconcileState {
+                source_job_id: request.previous_job_id,
+                target,
+                mutation: None,
+            }),
+        });
+        save_queue(queue, &jobs)?;
+        Ok(id)
+    })
+}
+
+fn ready_jobs(queue: &Path, receipts: &Path) -> Result<Vec<QueueJob>> {
+    with_queue_lock(queue, || {
+        let mut jobs = load_queue(queue)?;
+        let mut changed = false;
+        for job in &mut jobs {
+            if let Some(state) = &mut job.reconcile {
+                if state.target.is_none() {
+                    if let Some(receipt) = load_receipt(receipts, &state.source_job_id)? {
+                        let target = target_from_receipt(&receipt);
+                        if target.as_ref().is_some_and(|target| {
+                            Some(&target.track.saved_path)
+                                == job.tracks.first().map(|track| &track.saved_path)
+                        }) {
+                            state.target = target;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            save_queue(queue, &jobs)?;
+        }
+        Ok(jobs
+            .into_iter()
+            .filter(|job| {
+                job.reconcile
+                    .as_ref()
+                    .is_none_or(|state| state.target.is_some())
+            })
+            .collect())
+    })
+}
+
+fn checkpoint_replacement(queue: &Path, checkpoint: ReconcileCheckpoint) -> Result<bool> {
+    with_queue_lock(queue, || {
+        let mut jobs = load_queue(queue)?;
+        let Some(job) = jobs
+            .iter_mut()
+            .find(|job| job.id == checkpoint.job_id && job.revision == checkpoint.revision)
+        else {
+            return Ok(false);
+        };
+        let Some(state) = &mut job.reconcile else {
+            return Ok(false);
+        };
+        let Some(target) = &state.target else {
+            return Ok(false);
+        };
+        let mutation = checkpoint.mutation;
+        if mutation.old_uid.is_empty()
+            || !mutation.new_uri.starts_with("spotify:local:")
+            || mutation.original_rows.iter().any(|row| row.uid.is_empty())
+            || !mutation
+                .original_rows
+                .iter()
+                .any(|row| row.uid == mutation.old_uid && row.uri == target.added_uri)
+        {
+            return Ok(false);
+        }
+        if let Some(previous) = &state.mutation {
+            if previous.old_uid != mutation.old_uid
+                || previous.new_uri != mutation.new_uri
+                || serde_json::to_value(&previous.original_rows)?
+                    != serde_json::to_value(&mutation.original_rows)?
+                || previous
+                    .new_uid
+                    .as_ref()
+                    .is_some_and(|uid| mutation.new_uid.as_ref() != Some(uid))
+            {
+                return Ok(false);
+            }
+        }
+        state.mutation = Some(mutation);
+        save_queue(queue, &jobs)?;
+        Ok(true)
+    })
 }
 
 fn status_desktop_job(job_id: &str) -> Result<DesktopStatusResponse> {
@@ -265,7 +593,8 @@ fn status_for_job_with_progress(
                 status: "added".into(),
                 playlist_uri: receipt.playlist_uri,
                 added_uri: receipt.added_uri,
-                detail: None,
+                detail: receipt.detail,
+                track: receipt.track,
             });
         }
     }
@@ -280,6 +609,7 @@ fn status_for_job_with_progress(
         status: if pending { "pending" } else { "unknown" }.into(),
         playlist_uri: None,
         added_uri: None,
+        track: None,
         detail,
     })
 }
@@ -387,8 +717,11 @@ fn download(
                 album: needle.album.clone(),
                 saved_path: Some(needle.saved_path.clone()),
                 duration_ms: probe_duration_ms(&needle.saved_path),
+                file_revision: file_revision(&needle.saved_path),
             }],
             created_at_unix: unix_timestamp(),
+            revision: 0,
+            reconcile: None,
         })?;
         ensure_queue_server()?;
         true
@@ -611,7 +944,7 @@ enum AcknowledgeOutcome {
 fn acknowledge_job(
     queue: &Path,
     receipts: &Path,
-    receipt: AcknowledgementReceipt,
+    mut receipt: AcknowledgementReceipt,
 ) -> Result<AcknowledgeOutcome> {
     with_queue_lock(queue, || {
         let existing = load_receipt(receipts, &receipt.job_id)?;
@@ -625,9 +958,32 @@ fn acknowledge_job(
             return Ok(AcknowledgeOutcome::AlreadyAcknowledged);
         }
 
-        if !jobs.iter().any(|job| job.id == receipt.job_id) {
+        let Some(job) = jobs.iter().find(|job| job.id == receipt.job_id) else {
             return Ok(AcknowledgeOutcome::Unknown);
+        };
+        if let Some(reconcile) = &job.reconcile {
+            let Some(target) = &reconcile.target else {
+                return Ok(AcknowledgeOutcome::Incomplete);
+            };
+            if receipt.revision != job.revision
+                || receipt.playlist_uri.as_ref() != Some(&target.playlist_uri)
+            {
+                return Ok(AcknowledgeOutcome::Incomplete);
+            }
+            if let Some(mutation) = &reconcile.mutation {
+                if receipt.added_uri.as_ref() != Some(&mutation.new_uri)
+                    || receipt.added_uid != mutation.new_uid
+                {
+                    return Ok(AcknowledgeOutcome::Incomplete);
+                }
+            }
         }
+        receipt.source_job_id = job
+            .reconcile
+            .as_ref()
+            .map(|state| state.source_job_id.clone());
+        receipt.track = job.tracks.first().cloned();
+        receipt.revision = job.revision;
         if !complete_receipt(&receipt) {
             return Ok(AcknowledgeOutcome::Incomplete);
         }
@@ -749,9 +1105,11 @@ fn enqueue_job(job: QueueJob) -> Result<String> {
     with_queue_lock(&path, || {
         let mut jobs = load_queue(&path)?;
         if let Some(existing) = jobs.iter().find(|existing| {
-            existing
-                .playlist_name
-                .eq_ignore_ascii_case(&job.playlist_name)
+            existing.reconcile.is_none()
+                && job.reconcile.is_none()
+                && existing
+                    .playlist_name
+                    .eq_ignore_ascii_case(&job.playlist_name)
                 && existing.tracks.iter().any(|existing_track| {
                     job.tracks
                         .iter()
@@ -781,17 +1139,16 @@ fn save_queue(path: &Path, jobs: &[QueueJob]) -> Result<()> {
         .ok_or_else(|| anyhow!("queue path has no parent"))?;
     fs::create_dir_all(parent)?;
     let temporary = parent.join(format!(".browser-queue-{}.tmp", std::process::id()));
-    fs::write(&temporary, serde_json::to_vec_pretty(jobs)?)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    file.write_all(&serde_json::to_vec_pretty(jobs)?)?;
+    file.sync_all()?;
+    drop(file);
     fs::rename(&temporary, path)?;
     Ok(())
-}
-
-struct QueueLock(PathBuf);
-
-impl Drop for QueueLock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
 }
 
 fn with_queue_lock<T>(path: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
@@ -800,20 +1157,24 @@ fn with_queue_lock<T>(path: &Path, operation: impl FnOnce() -> Result<T>) -> Res
         .ok_or_else(|| anyhow!("queue path has no parent"))?;
     fs::create_dir_all(parent)?;
     let lock_path = parent.join("browser-queue.lock");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)?;
     let deadline = Instant::now() + Duration::from_secs(3);
-    let _lock = loop {
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock_path)
-        {
-            Ok(_) => break QueueLock(lock_path.clone()),
-            Err(error) if error.kind() == ErrorKind::AlreadyExists && Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(25));
+    loop {
+        match lock.try_lock() {
+            Ok(()) => break,
+            Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(25))
             }
-            Err(error) => return Err(error).context("failed to lock browser playlist queue"),
+            Err(error) => return Err(anyhow!("failed to lock browser playlist queue: {error}")),
         }
-    };
+    }
+    // Keep this inode in place. Closing the file releases the OS lock even
+    // after a crash or SIGTERM; deleting it would allow two owners to diverge.
     operation()
 }
 
@@ -897,8 +1258,15 @@ fn handle_http_request(mut request: Request) -> Result<()> {
     }
 
     match (request.method(), request.url()) {
-        (&Method::Get, "/queue") => {
-            let body = serde_json::to_string(&load_queue(&queue_path()?)?)?;
+        (&Method::Get, endpoint @ ("/queue" | "/queue?protocol=2")) => {
+            let jobs = ready_jobs(&queue_path()?, &receipt_dir()?)?;
+            // Older companions interpret every job as an add. Never expose a
+            // replacement until the consumer explicitly requests this protocol.
+            let compatible: Vec<_> = jobs
+                .into_iter()
+                .filter(|job| endpoint.ends_with("protocol=2") || job.reconcile.is_none())
+                .collect();
+            let body = serde_json::to_string(&compatible)?;
             let response = Response::from_string(body).with_header(json_header());
             request.respond(cors_response(response, origin.as_deref()))?;
         }
@@ -931,6 +1299,21 @@ fn handle_http_request(mut request: Request) -> Result<()> {
                     "spotify:local:",
                 ),
                 acknowledged_at_unix: unix_timestamp(),
+                revision: value
+                    .get("revision")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0),
+                track: None,
+                added_uid: value
+                    .get("addedUid")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned),
+                source_job_id: None,
+                detail: value
+                    .get("detail")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned),
             };
             let path = queue_path()?;
             match acknowledge_job(&path, &receipt_dir()?, receipt)? {
@@ -954,6 +1337,21 @@ fn handle_http_request(mut request: Request) -> Result<()> {
                     ))?;
                 }
             }
+        }
+        (&Method::Post, "/checkpoint") => {
+            let mut body = String::new();
+            request
+                .as_reader()
+                .take(1024 * 1024)
+                .read_to_string(&mut body)?;
+            let checkpoint: ReconcileCheckpoint = serde_json::from_str(&body)?;
+            let updated = checkpoint_replacement(&queue_path()?, checkpoint)?;
+            request.respond(cors_response(
+                Response::from_string("{}")
+                    .with_status_code(StatusCode(if updated { 200 } else { 409 }))
+                    .with_header(json_header()),
+                origin.as_deref(),
+            ))?;
         }
         (&Method::Post, "/progress") => {
             let mut body = String::new();
@@ -1127,13 +1525,16 @@ mod tests {
             album: None,
             saved_path: None,
             duration_ms: None,
+            file_revision: None,
         };
         let old = QueueTrack {
             duration_ms: Some(189_823),
+            file_revision: None,
             ..base.clone()
         };
         let downloaded = QueueTrack {
             duration_ms: Some(190_055),
+            file_revision: None,
             ..base.clone()
         };
         assert!(!queue_tracks_match(&old, &downloaded));
@@ -1142,6 +1543,7 @@ mod tests {
         let same_duration_different_album = QueueTrack {
             album: Some("REAL VERSION".into()),
             duration_ms: Some(190_055),
+            file_revision: None,
             ..base.clone()
         };
         assert!(!queue_tracks_match(
@@ -1243,6 +1645,8 @@ mod tests {
                 playlist_name: "Needle".into(),
                 tracks: vec![],
                 created_at_unix: 1,
+                revision: 0,
+                reconcile: None,
             }],
         )
         .unwrap();
@@ -1266,6 +1670,8 @@ mod tests {
                 playlist_name: "Needle".into(),
                 tracks: vec![],
                 created_at_unix: 1,
+                revision: 0,
+                reconcile: None,
             }],
         )
         .unwrap();
@@ -1317,6 +1723,11 @@ mod tests {
                 playlist_uri: Some("spotify:playlist:abc".into()),
                 added_uri: Some("spotify:local:def".into()),
                 acknowledged_at_unix: 1,
+                revision: 0,
+                track: None,
+                added_uid: None,
+                detail: None,
+                source_job_id: None,
             },
         )
         .unwrap();
@@ -1336,6 +1747,11 @@ mod tests {
                 playlist_uri: Some("spotify:playlist:abc".into()),
                 added_uri: None,
                 acknowledged_at_unix: 1,
+                revision: 0,
+                track: None,
+                added_uid: None,
+                detail: None,
+                source_job_id: None,
             },
         )
         .unwrap();
@@ -1362,6 +1778,11 @@ mod tests {
             playlist_uri: Some("spotify:playlist:old".into()),
             added_uri: Some("spotify:local:old".into()),
             acknowledged_at_unix: 1,
+            revision: 0,
+            track: None,
+            added_uid: None,
+            detail: None,
+            source_job_id: None,
         };
         save_receipt(&receipts, &first).unwrap();
         let second = AcknowledgementReceipt {
@@ -1396,6 +1817,8 @@ mod tests {
             playlist_name: "Needle".into(),
             tracks: vec![],
             created_at_unix: 1,
+            revision: 0,
+            reconcile: None,
         }
     }
 
@@ -1405,7 +1828,300 @@ mod tests {
             playlist_uri: complete.then(|| "spotify:playlist:test".into()),
             added_uri: complete.then(|| "spotify:local:test".into()),
             acknowledged_at_unix: 1,
+            revision: 0,
+            track: None,
+            added_uid: None,
+            detail: None,
+            source_job_id: None,
         }
+    }
+
+    fn metadata(name: &str) -> QueueTrack {
+        QueueTrack {
+            name: name.into(),
+            artist: "Artist".into(),
+            album: Some("Album".into()),
+            saved_path: Some(PathBuf::from("/tmp/same-recording.mp3")),
+            duration_ms: Some(190000),
+            file_revision: Some(name.into()),
+        }
+    }
+
+    fn confirmed_source(receipts: &Path) {
+        let mut source = receipt("original", true);
+        source.track = Some(metadata("A"));
+        source.added_uid = Some("original-row".into());
+        save_receipt(receipts, &source).unwrap();
+    }
+
+    fn request(previous: &str, name: &str) -> DesktopReconcileRequest {
+        DesktopReconcileRequest {
+            previous_job_id: previous.into(),
+            track: metadata(name),
+            previous_track: metadata("A"),
+        }
+    }
+
+    fn insertion() -> ReplacementMutation {
+        ReplacementMutation {
+            phase: ReplacementPhase::Adding,
+            old_uid: "original-row".into(),
+            new_uri: "spotify:local:B".into(),
+            new_uid: None,
+            original_rows: vec![PlaylistRow {
+                uri: "spotify:local:test".into(),
+                uid: "original-row".into(),
+            }],
+        }
+    }
+
+    #[test]
+    fn reconciliation_uses_exact_receipt_and_retains_current_file_snapshot() {
+        let (root, queue, receipts) = fixture_paths();
+        confirmed_source(&receipts);
+        let id = reconcile_job(&queue, &receipts, request("original", "B")).unwrap();
+        let jobs = load_queue(&queue).unwrap();
+        let target = jobs[0].reconcile.as_ref().unwrap().target.as_ref().unwrap();
+        assert_eq!(target.playlist_uri, "spotify:playlist:test");
+        assert_eq!(target.added_uri, "spotify:local:test");
+        assert_eq!(target.added_uid.as_deref(), Some("original-row"));
+        assert_eq!(jobs[0].tracks[0], metadata("B"));
+        let mut done = receipt(&id, true);
+        done.revision = jobs[0].revision;
+        done.added_uri = Some("spotify:local:B".into());
+        assert_eq!(
+            acknowledge_job(&queue, &receipts, done).unwrap(),
+            AcknowledgeOutcome::Acknowledged
+        );
+        assert_eq!(
+            load_receipt(&receipts, &id).unwrap().unwrap().track,
+            Some(metadata("B"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unstarted_metadata_changes_coalesce_and_stale_acknowledgements_are_rejected() {
+        let (root, queue, receipts) = fixture_paths();
+        confirmed_source(&receipts);
+        let id = reconcile_job(&queue, &receipts, request("original", "B")).unwrap();
+        assert_eq!(
+            reconcile_job(&queue, &receipts, request(&id, "C")).unwrap(),
+            id
+        );
+        let jobs = load_queue(&queue).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].tracks[0].name, "C");
+        assert_eq!(jobs[0].revision, 2);
+        let mut stale = receipt(&id, true);
+        stale.revision = 1;
+        assert_eq!(
+            acknowledge_job(&queue, &receipts, stale).unwrap(),
+            AcknowledgeOutcome::Incomplete
+        );
+        assert!(!checkpoint_replacement(
+            &queue,
+            ReconcileCheckpoint {
+                job_id: id,
+                revision: 1,
+                mutation: insertion()
+            }
+        )
+        .unwrap());
+        assert_eq!(load_queue(&queue).unwrap().len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn metadata_changes_during_insertion_serialize_after_durable_receipt() {
+        let (root, queue, receipts) = fixture_paths();
+        confirmed_source(&receipts);
+        let b = reconcile_job(&queue, &receipts, request("original", "B")).unwrap();
+        let mut mutation = insertion();
+        assert!(checkpoint_replacement(
+            &queue,
+            ReconcileCheckpoint {
+                job_id: b.clone(),
+                revision: 1,
+                mutation: mutation.clone()
+            }
+        )
+        .unwrap());
+        let c = reconcile_job(&queue, &receipts, request(&b, "C")).unwrap();
+        assert_ne!(b, c);
+        assert_eq!(ready_jobs(&queue, &receipts).unwrap().len(), 1);
+        mutation.new_uid = Some("B-row".into());
+        mutation.phase = ReplacementPhase::Removing;
+        assert!(checkpoint_replacement(
+            &queue,
+            ReconcileCheckpoint {
+                job_id: b.clone(),
+                revision: 1,
+                mutation
+            }
+        )
+        .unwrap());
+        let mut done = receipt(&b, true);
+        done.revision = 1;
+        done.added_uri = Some("spotify:local:B".into());
+        done.added_uid = Some("B-row".into());
+        assert_eq!(
+            acknowledge_job(&queue, &receipts, done).unwrap(),
+            AcknowledgeOutcome::Acknowledged
+        );
+        let ready = ready_jobs(&queue, &receipts).unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, c);
+        let target = ready[0]
+            .reconcile
+            .as_ref()
+            .unwrap()
+            .target
+            .as_ref()
+            .unwrap();
+        assert_eq!(target.added_uri, "spotify:local:B");
+        assert_eq!(target.added_uid.as_deref(), Some("B-row"));
+        assert_eq!(ready[0].tracks[0].name, "C");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_receipts_and_wrong_file_associations_cannot_mint_replacement_targets() {
+        let (root, queue, receipts) = fixture_paths();
+        assert!(reconcile_job(&queue, &receipts, request("missing", "B")).is_err());
+        confirmed_source(&receipts);
+        let mut wrong = request("original", "B");
+        wrong.track.saved_path = Some(PathBuf::from("/tmp/another.mp3"));
+        assert!(reconcile_job(&queue, &receipts, wrong).is_err());
+        assert!(load_queue(&queue).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_receipt_adoption_requires_known_job_and_same_file() {
+        let (root, queue, receipts) = fixture_paths();
+        save_receipt(&receipts, &receipt("original", true)).unwrap();
+        let mut wrong = request("original", "B");
+        wrong.previous_track.saved_path = Some(PathBuf::from("/tmp/other.mp3"));
+        assert!(reconcile_job(&queue, &receipts, wrong).is_err());
+        let id = reconcile_job(&queue, &receipts, request("original", "B")).unwrap();
+        assert_ne!(id, "original");
+        let adopted = load_receipt(&receipts, "original").unwrap().unwrap();
+        assert_eq!(adopted.track.unwrap().saved_path, metadata("A").saved_path);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unchanged_snapshot_is_idempotent_and_file_revision_alone_triggers_reconciliation() {
+        let (root, queue, receipts) = fixture_paths();
+        confirmed_source(&receipts);
+        assert_eq!(
+            reconcile_job(&queue, &receipts, request("original", "A")).unwrap(),
+            "original"
+        );
+        assert!(load_queue(&queue).unwrap().is_empty());
+        let mut artwork = request("original", "A");
+        artwork.track.file_revision = Some("new-embedded-cover".into());
+        assert_ne!(
+            reconcile_job(&queue, &receipts, artwork).unwrap(),
+            "original"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn queue_and_receipts_from_previous_versions_remain_decodable() {
+        let job: QueueJob = serde_json::from_str(
+            r#"{"id":"legacy","playlistName":"Needle","tracks":[],"createdAtUnix":1}"#,
+        )
+        .unwrap();
+        assert!(job.reconcile.is_none());
+        assert_eq!(job.revision, 0);
+        let receipt: AcknowledgementReceipt = serde_json::from_str(r#"{"jobId":"legacy","playlistUri":"spotify:playlist:p","addedUri":"spotify:local:t","acknowledgedAtUnix":1}"#).unwrap();
+        assert!(receipt.track.is_none());
+        assert!(receipt.added_uid.is_none());
+    }
+
+    #[test]
+    fn stale_history_follows_pending_and_completed_successor_receipts() {
+        let (root, queue, receipts) = fixture_paths();
+        confirmed_source(&receipts);
+        let b = reconcile_job(&queue, &receipts, request("original", "B")).unwrap();
+        assert_eq!(
+            reconcile_job(&queue, &receipts, request("original", "C")).unwrap(),
+            b
+        );
+        assert_eq!(load_queue(&queue).unwrap()[0].tracks[0].name, "C");
+        let mut done = receipt(&b, true);
+        done.revision = 2;
+        done.added_uri = Some("spotify:local:C".into());
+        done.added_uid = Some("C-row".into());
+        acknowledge_job(&queue, &receipts, done).unwrap();
+        let d = reconcile_job(&queue, &receipts, request("original", "D")).unwrap();
+        let jobs = load_queue(&queue).unwrap();
+        let target = jobs[0].reconcile.as_ref().unwrap().target.as_ref().unwrap();
+        assert_eq!(jobs[0].id, d);
+        assert_eq!(target.added_uri, "spotify:local:C");
+        assert_eq!(target.added_uid.as_deref(), Some("C-row"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_unknown_file_revision_requires_safe_current_index_confirmation() {
+        let (root, queue, receipts) = fixture_paths();
+        save_receipt(&receipts, &receipt("original", true)).unwrap();
+        let mut same_tags = request("original", "A");
+        same_tags.previous_track.file_revision = None;
+        let id = reconcile_job(&queue, &receipts, same_tags).unwrap();
+        assert_ne!(id, "original");
+        assert_eq!(load_queue(&queue).unwrap().len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn queue_lock_child_fixture() {
+        let Ok(root) = std::env::var("NEEDLE_TEST_LOCK_CHILD") else {
+            return;
+        };
+        let path = PathBuf::from(root);
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path.join("browser-queue.lock"))
+            .unwrap();
+        lock.try_lock().unwrap();
+        fs::write(path.join("held"), b"ready").unwrap();
+        loop {
+            thread::sleep(Duration::from_secs(1));
+        }
+    }
+
+    #[test]
+    fn killed_queue_owner_releases_lock_without_stale_marker_cleanup() {
+        let (root, queue, _receipts) = fixture_paths();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::queue_lock_child_fixture", "--nocapture"])
+            .env("NEEDLE_TEST_LOCK_CHILD", &root)
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !root.join("held").exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let held = root.join("held").exists();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(held, "child acquired the real OS lock");
+        assert!(root.join("browser-queue.lock").exists());
+        with_queue_lock(&queue, || {
+            save_queue(&queue, &[])?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(load_queue(&queue).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -75,6 +75,27 @@ printf '%s\n' '{"ok":true,"tracks":[{"path":"/tmp/Artist/Song.aif","artist":"Art
         XCTAssertEqual(history.tracks.count, 1)
     }
 
+    @MainActor
+    func testLibraryScanReportsChangedTagsWithTheExactPriorSpotifyJob() async throws {
+        let fixture = try CLIFixture(script: #"""
+#!/bin/bash
+printf '%s\n' '{"ok":true,"tracks":[{"path":"/tmp/scan-reconcile.mp3","artist":"Artist","title":"Current title","album":"Current album","modifiedMs":1700000000000}],"warnings":[]}'
+"""#)
+        var settings = NeedleSettings(); settings.cliPath = fixture.path
+        let defaults = UserDefaults(suiteName: "needle-scan-reconcile-\(UUID().uuidString)")!
+        let history = HistoryStore(defaults: defaults)
+        let original = TrackRequest(artist: "Artist", title: "Old title", album: "Old album", savedPath: "/tmp/scan-reconcile.mp3", spotifyStatus: .added, spotifyJobID: "exact-original-job", spotifyPlaylistURI: "spotify:playlist:exact", stage: .spotifyAdded)
+        history.upsert(original)
+        let response = await LibraryScanService().scan(root: URL(fileURLWithPath: "/tmp"), settings: settings, history: history)
+        guard case .success(let summary) = response else { return XCTFail("scan failed") }
+        XCTAssertEqual(summary.imported, 0)
+        XCTAssertEqual(summary.spotifyUpdates.count, 1)
+        XCTAssertEqual(summary.spotifyUpdates[0].previous.title, "Old title")
+        XCTAssertEqual(summary.spotifyUpdates[0].current.title, "Current title")
+        XCTAssertEqual(summary.spotifyUpdates[0].current.spotifyJobID, "exact-original-job")
+        XCTAssertEqual(summary.spotifyUpdates[0].current.spotifyPlaylistURI, "spotify:playlist:exact")
+    }
+
     func testGetReportsSplitProgressAndUsesAuthoritativeSavedFields() async throws {
         let fixture = try CLIFixture(script: #"""
 #!/bin/bash

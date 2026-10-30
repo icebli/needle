@@ -103,7 +103,18 @@ struct ContentView: View {
                     .padding(.vertical, 5)
             }
         }
-        .task { if model.tools == nil { model.checkTools() } }
+        .task {
+            if model.tools == nil { model.checkTools() }
+            model.scanLibrary()
+            model.refreshArtwork()
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(15 * 60)) }
+                catch { return }
+                model.refreshArtwork()
+            }
+        }
+        .onChange(of: model.bookmarks.items.map(\.id)) { model.refreshArtwork() }
+        .onChange(of: model.history.tracks) { model.refreshArtwork() }
     }
 }
 

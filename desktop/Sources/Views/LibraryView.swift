@@ -26,6 +26,7 @@ struct LibraryView: View {
             Text("Recordings in your Needle folder, including files added outside the app.").foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 Label("\(tracks.count) recordings", systemImage: "music.note.list")
+                ArtworkBackfillStatusView(model: model)
                 if model.libraryImportedCount > 0 {
                     Text("\(model.libraryImportedCount) newly found").foregroundStyle(.secondary)
                 }
@@ -84,7 +85,7 @@ private struct LibraryArtwork: View {
     var body: some View {
         ArtworkThumbnail(path: artworkPath).frame(width: 44, height: 44)
             .accessibilityLabel("Embedded artwork for \(track.title)")
-            .task(id: track.date) {
+            .task(id: track.artworkUpdatedAt ?? track.date) {
                 artworkPath = nil
                 if case .success(let inspection) = await LibraryRepairService().inspect(track, settings: model.settings.value) {
                     artworkPath = inspection.artwork.first?.extractedPath

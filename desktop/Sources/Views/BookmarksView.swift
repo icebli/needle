@@ -25,6 +25,7 @@ struct BookmarksView: View {
                     .font(.callout).foregroundStyle(.secondary)
                     .accessibilityIdentifier("bookmarkResultCount")
                 Spacer()
+                ArtworkBackfillStatusView(model: model)
                 Picker("View", selection: $layout) {
                     Label("Gallery", systemImage: "square.grid.2x2").tag(BookmarkLayout.gallery)
                     Label("List", systemImage: "list.bullet").tag(BookmarkLayout.list)

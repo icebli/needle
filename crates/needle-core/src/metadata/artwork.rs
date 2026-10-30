@@ -319,6 +319,21 @@ fn now_nanos() -> u128 {
         .as_nanos()
 }
 
+pub(super) async fn resolve_release_artwork(
+    client: Client,
+    release: &str,
+    group: Option<&str>,
+) -> Result<Option<ArtworkReference>> {
+    if !valid_mbid(release) {
+        return Ok(None);
+    }
+    let cache = directories::ProjectDirs::from("dev", "tege", "needle")
+        .map(|dirs| dirs.cache_dir().join("artwork-lookups"));
+    ArtworkResolver::new(client, "https://coverartarchive.org".into(), cache)
+        .lookup("release", release, group)
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,6 +349,16 @@ mod tests {
     const RELEASE: &str = "11111111-1111-1111-1111-111111111111";
     const GROUP: &str = "22222222-2222-2222-2222-222222222222";
     const OTHER: &str = "33333333-3333-3333-3333-333333333333";
+
+    fn test_cache_directory() -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        std::env::temp_dir().join(format!(
+            "needle-art-cache-{}-{}-{}",
+            std::process::id(),
+            now_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
 
     fn server(responses: Vec<(u16, String)>) -> (String, Arc<AtomicUsize>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -428,7 +453,7 @@ mod tests {
     #[tokio::test]
     async fn positive_and_missing_covers_survive_resolver_restart() {
         for (status, body) in [(200, cover(RELEASE)), (404, String::new())] {
-            let cache = std::env::temp_dir().join(format!("needle-art-cache-{}", now_nanos()));
+            let cache = test_cache_directory();
             let (base, count) = server(vec![(status, body)]);
             let first = resolver(base.clone(), Some(cache.clone()))
                 .lookup("release", RELEASE, Some(GROUP))
@@ -446,7 +471,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_requests_share_the_cached_lookup() {
-        let cache = std::env::temp_dir().join(format!("needle-art-cache-{}", now_nanos()));
+        let cache = test_cache_directory();
         let (base, count) = server(vec![(200, cover(RELEASE))]);
         let resolver = resolver(base, Some(cache.clone()));
         let (first, second) = tokio::join!(
@@ -474,7 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn transient_failure_is_retried_and_not_cached_as_missing() {
-        let cache = std::env::temp_dir().join(format!("needle-art-cache-{}", now_nanos()));
+        let cache = test_cache_directory();
         let (base, count) = server(vec![
             (503, "".into()),
             (503, "".into()),
@@ -493,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn expired_negative_cache_is_refreshed() {
-        let cache = std::env::temp_dir().join(format!("needle-art-cache-{}", now_nanos()));
+        let cache = test_cache_directory();
         std::fs::create_dir_all(&cache).unwrap();
         std::fs::write(
             cache.join(format!("release-{RELEASE}.json")),

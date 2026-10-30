@@ -1,3 +1,5 @@
+mod strict_artwork;
+pub use strict_artwork::{resolve_artwork, same_identity};
 mod artwork;
 pub use artwork::ArtworkReference;
 
