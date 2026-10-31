@@ -3,6 +3,36 @@ import XCTest
 
 @MainActor
 final class DiscoveryStoreTests: XCTestCase {
+    func testFindRetryAndRefreshKeepCatalogVersionAmbiguityUnconfirmed() async {
+        let suite = "NeedleVersionReview.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = DiscoveryStore(defaults: defaults)
+        let artist = SpotifyArtist(id: "tory", name: "Tory Lanez", uri: "spotify:artist:tory")
+        let track = SpotifyCatalogTrack(id: "remix", name: "WHATS POPPIN (feat. Tory Lanez) - Remix",
+            uri: "spotify:track:remix", artists: [SpotifyArtistCredit(id: "jack", name: "Jack Harlow"),
+                SpotifyArtistCredit(id: artist.id, name: artist.name)])
+        store.artists = [artist]
+        store.selectedArtistIDs = [artist.id]
+        store.find(settings: NeedleSettings(), library: [], sourceLookup: { _ in
+            [Candidate(provider: "youtube", id: "poppin", url: "https://example.com/poppin",
+                title: "Jack Harlow - WHATS POPPIN feat. Tory Lanez", uploader: "Jack Harlow", durationMs: nil, thumbnailURL: nil)]
+        }, catalogLookup: { _, _ in [track] })
+        await finishRefresh(store)
+        XCTAssertEqual(store.recordings.first?.availability, .unknown)
+        XCTAssertTrue(store.recordings.first?.detail?.contains("Remix") == true)
+        XCTAssertNil(store.recordings.first?.catalogURI)
+        store.retryCatalog(store.recordings[0], lookup: { _, _ in [track] })
+        await finishRefresh(store)
+        XCTAssertEqual(store.recordings.first?.availability, .unknown)
+        XCTAssertTrue(store.recordings.first?.detail?.contains("version") == true)
+        store.refreshCatalog { _, _ in [track] }
+        await finishRefresh(store)
+        XCTAssertEqual(store.recordings.first?.availability, .unknown)
+        XCTAssertTrue(store.catalogNotice?.contains("1 need review") == true)
+        XCTAssertEqual(DiscoveryStore(defaults: defaults).recordings.first?.availability, .unknown)
+    }
+
     func testRefreshAllRechecksEveryStatusAndPersistsResults() async throws {
         let suite = "NeedleRefreshAll.\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
@@ -62,7 +92,7 @@ final class DiscoveryStoreTests: XCTestCase {
         let artist = SpotifyArtist(id: "a", name: "Artist", uri: "spotify:artist:a")
         return [CatalogAvailability.noMatch, .found, .unknown].enumerated().map { index, availability in
             let candidate = Candidate(provider: "youtube", id: "\(index)", url: "https://www.youtube.com/watch?v=\(index)",
-                title: "Song \(index)", uploader: nil, durationMs: nil, thumbnailURL: nil)
+                title: "Song \(index)", uploader: "Artist", durationMs: nil, thumbnailURL: nil)
             return DiscoveryRecording(artist: artist, title: candidate.title, candidate: candidate, availability: availability,
                 catalogURI: availability == .found ? "spotify:track:old" : nil)
         }

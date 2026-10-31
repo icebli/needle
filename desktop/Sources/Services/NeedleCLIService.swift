@@ -125,6 +125,9 @@ actor NeedleCLIService {
 
     func prepareMetadata(artist: String, title: String, candidate: Candidate, settings: NeedleSettings) async -> Result<MetadataDraft, Error> {
         var args = ["prepare", artist, title, "--source-title", candidate.title, "--url", candidate.url]
+        if let duration = candidate.durationMs, duration > 0 {
+            args += ["--source-duration-ms", String(duration)]
+        }
         if !settings.albumHint.isEmpty { args += ["--album", settings.albumHint] }
         if settings.noMetadata { args += ["--no-metadata"] }
         do {

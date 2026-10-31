@@ -7,11 +7,17 @@ struct ArtworkBackfillRequest: Sendable {
     let album: String
     let path: String?
     var sourceTitle: String? = nil
+    var sourceDurationMs: Int? = nil
+    var sourceURL: String? = nil
+    var sourceThumbnailURL: String? = nil
 
     var arguments: [String] {
         var args = ["artwork", "--artist", artist, "--title", title, "--album", album, "--json"]
         if let path { args += ["--path", path] }
         if let sourceTitle { args += ["--source-title", sourceTitle] }
+        if let sourceDurationMs, sourceDurationMs > 0 { args += ["--source-duration-ms", String(sourceDurationMs)] }
+        if let sourceURL, !sourceURL.isEmpty { args += ["--source-url", sourceURL] }
+        if let sourceThumbnailURL { args += ["--source-thumbnail-url", sourceThumbnailURL] }
         return args
     }
 }
@@ -53,7 +59,7 @@ final class ArtworkBackfillService {
     private let lookup: ((ArtworkBackfillRequest, NeedleSettings) async throws -> ArtworkBackfillResponse)?
     private let now: () -> Date
     private var nextAttempts: [String: Date]
-    private let ledgerKey = "needle.artworkBackfill.v2"
+    private let ledgerKey = "needle.artworkBackfill.v3"
 
     init(defaults: UserDefaults = .standard, now: @escaping () -> Date = Date.init,
          lookup: ((ArtworkBackfillRequest, NeedleSettings) async throws -> ArtworkBackfillResponse)? = nil) {
@@ -160,9 +166,13 @@ final class ArtworkBackfillService {
 
     private static func jobs(bookmarks: BookmarkStore, history: HistoryStore) -> [Job] {
         var jobs = bookmarks.items.filter { $0.artwork == nil }.map { bookmark in
-            let request = ArtworkBackfillRequest(artist: bookmark.artist, title: bookmark.title, album: bookmark.album, path: nil, sourceTitle: bookmark.candidate.title)
+            let request = ArtworkBackfillRequest(artist: bookmark.artist, title: bookmark.title, album: bookmark.album, path: nil,
+                sourceTitle: bookmark.candidate.title, sourceDurationMs: bookmark.candidate.durationMs,
+                sourceURL: bookmark.candidate.url, sourceThumbnailURL: bookmark.candidate.thumbnailURL)
             return Job(request: request,
-                       key: key(["bookmark", bookmark.id, bookmark.candidate.url, String(bookmark.date.timeIntervalSince1970), bookmark.artist, bookmark.title, bookmark.album]),
+                       key: key(["bookmark", bookmark.id, bookmark.candidate.url, String(bookmark.date.timeIntervalSince1970),
+                                 bookmark.artist, bookmark.title, bookmark.album, bookmark.candidate.title,
+                                 bookmark.candidate.durationMs.map(String.init) ?? "", bookmark.candidate.thumbnailURL ?? ""]),
                        bookmark: bookmark, track: nil)
         }
         var paths = Set<String>()
@@ -174,12 +184,26 @@ final class ArtworkBackfillService {
             guard paths.insert(url.path).inserted,
                   let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]),
                   values.isRegularFile == true, values.isSymbolicLink != true else { continue }
-            jobs.append(Job(request: ArtworkBackfillRequest(artist: track.artist, title: track.title, album: track.album, path: url.path),
+            jobs.append(Job(request: ArtworkBackfillRequest(artist: track.artist, title: track.title, album: track.album, path: url.path,
+                                                          sourceURL: track.sourceURL),
                             key: key(["file", url.path, track.artist, track.title, track.album,
-                                      String(values.fileSize ?? 0), String(values.contentModificationDate?.timeIntervalSince1970 ?? 0)]),
+                                      track.sourceURL, String(values.fileSize ?? 0),
+                                      String(values.contentModificationDate?.timeIntervalSince1970 ?? 0)] + savedSourceKey(url)),
                             bookmark: nil, track: track))
         }
         return jobs
+    }
+
+    private static func savedSourceKey(_ file: URL) -> [String] {
+        let sidecar = file.deletingPathExtension().appendingPathExtension("json")
+        guard let values = try? sidecar.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]),
+              values.isRegularFile == true, values.isSymbolicLink != true,
+              let size = values.fileSize, size <= 512 * 1024 else { return [] }
+        let object = (try? Data(contentsOf: sidecar))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        let selectedSource = object?["selected_source"] as? [String: Any]
+        let evidence = selectedSource.flatMap { try? JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys]) }
+        return [String(size), String(values.contentModificationDate?.timeIntervalSince1970 ?? 0), evidence?.base64EncodedString() ?? ""]
     }
 
     private static func key(_ parts: [String]) -> String {

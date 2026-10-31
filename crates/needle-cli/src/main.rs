@@ -31,9 +31,8 @@ enum Commands {
         album: String,
         #[arg(long)]
         path: Option<PathBuf>,
-        /// Immutable source title from the selected source or provenance sidecar.
-        #[arg(long)]
-        source_title: Option<String>,
+        #[command(flatten)]
+        source: ArtworkSourceInput,
         /// Resolve and explain artwork without changing the audio file.
         #[arg(long)]
         dry_run: bool,
@@ -90,6 +89,9 @@ enum Commands {
         title: String,
         #[arg(long)]
         source_title: String,
+        /// Duration of the selected recording, used only to corroborate cover suggestions
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        source_duration_ms: Option<u64>,
         #[arg(long)]
         url: String,
         #[arg(short, long)]
@@ -187,6 +189,22 @@ enum Commands {
     },
 }
 
+#[derive(clap::Args, Debug, Default)]
+struct ArtworkSourceInput {
+    /// Immutable title of the selected source.
+    #[arg(long)]
+    source_title: Option<String>,
+    /// Duration of the selected source, used to corroborate catalog artwork.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    source_duration_ms: Option<u64>,
+    /// Expected immutable source URL; saved-file provenance must match exactly.
+    #[arg(long)]
+    source_url: Option<String>,
+    /// Source thumbnail to use only when no catalog cover is available.
+    #[arg(long)]
+    source_thumbnail_url: Option<String>,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Structured stdout modes reserve stdout for their single JSON response.
@@ -202,21 +220,10 @@ async fn main() -> Result<()> {
             title,
             album,
             path,
-            source_title,
+            source,
             dry_run,
             json,
-        } => {
-            cmd_artwork(
-                &artist,
-                &title,
-                &album,
-                path,
-                source_title.as_deref(),
-                dry_run,
-                json,
-            )
-            .await
-        }
+        } => cmd_artwork(&artist, &title, &album, path, source, dry_run, json).await,
         Commands::Get {
             artist,
             title,
@@ -255,10 +262,22 @@ async fn main() -> Result<()> {
             artist,
             title,
             source_title,
+            source_duration_ms,
             url,
             album,
             no_metadata,
-        } => cmd_prepare(artist, title, source_title, url, album, no_metadata).await,
+        } => {
+            cmd_prepare(
+                artist,
+                title,
+                source_title,
+                source_duration_ms,
+                url,
+                album,
+                no_metadata,
+            )
+            .await
+        }
         Commands::Search {
             artist,
             title,
@@ -391,6 +410,11 @@ struct ArtworkResult {
 #[derive(Default)]
 struct ArtworkSourceEvidence {
     titles: Vec<String>,
+    sidecar_bytes: Option<Vec<u8>>,
+    duration_ms: Option<u64>,
+    url: Option<String>,
+    provider: Option<String>,
+    id: Option<String>,
     provenance: bool,
     approved_albums: Vec<String>,
     previous_title_words: Vec<std::collections::HashSet<String>>,
@@ -503,19 +527,13 @@ fn read_artwork_source_evidence(
     title: &str,
 ) -> ArtworkSourceEvidence {
     let mut evidence = ArtworkSourceEvidence::default();
-    let sidecar = path.with_extension("json");
-    let Ok(metadata) = std::fs::symlink_metadata(&sidecar) else {
-        return evidence;
-    };
-    if !metadata.file_type().is_file() || metadata.len() > 512 * 1024 {
-        return evidence;
-    }
-    let Ok(bytes) = std::fs::read(&sidecar) else {
+    let Some(bytes) = read_artwork_sidecar(path) else {
         return evidence;
     };
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return evidence;
     };
+    evidence.sidecar_bytes = Some(bytes);
     evidence.approved_albums = value
         .pointer("/requested/album")
         .and_then(serde_json::Value::as_str)
@@ -590,15 +608,33 @@ fn read_artwork_source_evidence(
             evidence.previous_title_words.push(words);
         }
     }
-    if let Some(title) = value
-        .get("selected_source")
-        .and_then(|source| source.get("title"))
-        .and_then(serde_json::Value::as_str)
-    {
+    let source = &value["selected_source"];
+    evidence.duration_ms = source["duration_ms"]
+        .as_u64()
+        .filter(|duration| *duration > 0);
+    evidence.url = source["url"].as_str().map(str::to_owned);
+    evidence.provider = source["provider"].as_str().map(str::to_owned);
+    evidence.id = source["id"].as_str().map(str::to_owned);
+    if let Some(title) = source.get("title").and_then(serde_json::Value::as_str) {
         evidence.titles.push(title.to_owned());
         evidence.provenance = true;
     }
     evidence
+}
+
+fn read_artwork_sidecar(path: &std::path::Path) -> Option<Vec<u8>> {
+    let sidecar = path.with_extension("json");
+    let metadata = std::fs::symlink_metadata(&sidecar).ok()?;
+    if !metadata.file_type().is_file() || metadata.len() > 512 * 1024 {
+        return None;
+    }
+    let file = std::fs::File::open(sidecar).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(512 * 1024 + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() <= 512 * 1024).then_some(bytes)
 }
 
 fn artwork_source_matches(
@@ -767,12 +803,164 @@ fn artwork_lookup_album<'a>(
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct ArtworkCatalogRequest {
+    artist: String,
+    title: String,
+    duration_ms: Option<u64>,
+    album: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ArtworkLookup {
+    catalog: ArtworkCatalogRequest,
+    thumbnail: Option<needle_core::metadata::ArtworkReference>,
+    sidecar_bytes: Option<Vec<u8>>,
+}
+
+fn source_thumbnail(url: &str) -> Option<needle_core::metadata::ArtworkReference> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    (matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some()).then(|| {
+        needle_core::metadata::ArtworkReference {
+            url: url.to_owned(),
+            provider: "source".to_owned(),
+            release_id: None,
+            release_group_id: None,
+        }
+    })
+}
+
+fn saved_source_thumbnail(
+    evidence: &ArtworkSourceEvidence,
+) -> Option<needle_core::metadata::ArtworkReference> {
+    if evidence.provider.as_deref() != Some("youtube") {
+        return None;
+    }
+    let id = evidence.id.as_deref()?;
+    if id.len() != 11
+        || !id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+    {
+        return None;
+    }
+    let url = reqwest::Url::parse(evidence.url.as_deref()?).ok()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return None;
+    }
+    let matches = match url.host_str()? {
+        "youtu.be" | "www.youtu.be" => url.path() == format!("/{id}"),
+        "youtube.com" | "www.youtube.com" | "m.youtube.com" | "music.youtube.com" => {
+            if url.path() == "/watch" {
+                let ids: Vec<_> = url.query_pairs().filter(|(key, _)| key == "v").collect();
+                ids.len() == 1 && ids[0].1 == id
+            } else {
+                ["shorts", "embed", "live"]
+                    .into_iter()
+                    .any(|kind| url.path() == format!("/{kind}/{id}"))
+            }
+        }
+        _ => false,
+    };
+    matches.then(|| source_thumbnail(&format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg")))?
+}
+
+fn artwork_lookup(
+    artist: &str,
+    title: &str,
+    saved_album: &str,
+    path: Option<&std::path::Path>,
+    source: &ArtworkSourceInput,
+) -> std::result::Result<ArtworkLookup, &'static str> {
+    let evidence = path
+        .map(|path| read_artwork_source_evidence(path, artist, title))
+        .unwrap_or_default();
+    if path.is_some()
+        && source
+            .source_url
+            .as_deref()
+            .is_some_and(|expected| evidence.url.as_deref() != Some(expected))
+    {
+        return Err("source_identity_or_filename_conflict");
+    }
+    if !artwork_source_matches(artist, title, path, source.source_title.as_deref()) {
+        return Err(
+            if evidence.titles.is_empty() && source.source_title.is_none() {
+                "missing_independent_source_evidence"
+            } else {
+                "source_identity_or_filename_conflict"
+            },
+        );
+    }
+    let album = match artwork_lookup_album(saved_album, artist, title, path) {
+        ArtworkAlbum::Exact(album) => album,
+        ArtworkAlbum::Unspecified => "",
+        ArtworkAlbum::NeedsReview => {
+            return Err("unverified_album_variant_requires_metadata_review");
+        }
+    };
+    let source_title = evidence
+        .titles
+        .first()
+        .map(String::as_str)
+        .or(source.source_title.as_deref())
+        .unwrap_or_default();
+    let title = source_title_for_artwork(
+        without_production_credit(without_artwork_presentation(source_title)),
+        artist,
+    );
+    Ok(ArtworkLookup {
+        catalog: ArtworkCatalogRequest {
+            artist: artist.to_owned(),
+            title: title.to_owned(),
+            duration_ms: if path.is_some() {
+                evidence.duration_ms
+            } else {
+                source.source_duration_ms
+            },
+            album: album.to_owned(),
+        },
+        thumbnail: if path.is_some() {
+            saved_source_thumbnail(&evidence)
+        } else {
+            source
+                .source_thumbnail_url
+                .as_deref()
+                .and_then(source_thumbnail)
+        },
+        sidecar_bytes: evidence.sidecar_bytes,
+    })
+}
+
+fn ensure_artwork_source_unchanged(path: &std::path::Path, lookup: &ArtworkLookup) -> Result<()> {
+    if read_artwork_sidecar(path) != lookup.sidecar_bytes {
+        bail!("source evidence changed during artwork lookup");
+    }
+    Ok(())
+}
+
+async fn resolve_backfill_artwork<F, Fut>(
+    lookup: &ArtworkLookup,
+    catalog: F,
+) -> Result<Option<needle_core::metadata::ArtworkReference>>
+where
+    F: FnOnce(ArtworkCatalogRequest) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<needle_core::metadata::ArtworkReference>>>,
+{
+    let artwork = catalog(lookup.catalog.clone()).await?;
+    Ok(artwork.or_else(|| lookup.thumbnail.clone()))
+}
+
 async fn cmd_artwork(
     artist: &str,
     title: &str,
     album: &str,
     path: Option<PathBuf>,
-    source_title: Option<&str>,
+    source: ArtworkSourceInput,
     dry_run: bool,
     json: bool,
 ) -> Result<()> {
@@ -792,33 +980,15 @@ async fn cmd_artwork(
         result.status = "existing";
         result.reason = None;
     } else {
-        if !artwork_source_matches(artist, title, path.as_deref(), source_title) {
-            let evidence = path
-                .as_deref()
-                .map(|path| read_artwork_source_evidence(path, artist, title))
-                .unwrap_or_default();
-            result.reason = Some(if evidence.titles.is_empty() && source_title.is_none() {
-                "missing_independent_source_evidence"
-            } else {
-                "source_identity_or_filename_conflict"
-            });
-            if json {
-                println!("{}", serde_json::to_string(&result)?);
-            } else {
-                println!("Artwork: {}", result.status);
-            }
-            return Ok(());
-        }
         let saved_album = initial
             .as_ref()
             .and_then(|state| state.0.album.as_deref())
             .filter(|v| !v.trim().is_empty())
             .unwrap_or(album);
-        let album = match artwork_lookup_album(saved_album, artist, title, path.as_deref()) {
-            ArtworkAlbum::Exact(album) => album,
-            ArtworkAlbum::Unspecified => "",
-            ArtworkAlbum::NeedsReview => {
-                result.reason = Some("unverified_album_variant_requires_metadata_review");
+        let lookup = match artwork_lookup(artist, title, saved_album, path.as_deref(), &source) {
+            Ok(lookup) => lookup,
+            Err(reason) => {
+                result.reason = Some(reason);
                 if json {
                     println!("{}", serde_json::to_string(&result)?);
                 } else {
@@ -827,14 +997,23 @@ async fn cmd_artwork(
                 return Ok(());
             }
         };
-        result.lookup_album = album.to_owned();
-        result.artwork = needle_core::metadata::resolve_artwork(
-            artist,
-            without_artwork_presentation(title),
-            album,
-        )
+        result.lookup_album = lookup.catalog.album.clone();
+        result.artwork = resolve_backfill_artwork(&lookup, |request| async move {
+            Ok(needle_core::metadata::resolve_source_artwork(
+                &request.artist,
+                &request.title,
+                request.duration_ms,
+                (!request.album.is_empty()).then_some(request.album.as_str()),
+            )
+            .await?
+            .map(|suggestion| suggestion.artwork))
+        })
         .await?;
         if let Some(artwork) = result.artwork.as_ref() {
+            if path.is_none() && artwork.provider == "source" {
+                let image = download_approved_artwork(&artwork.url).await?;
+                let _ = std::fs::remove_file(image);
+            }
             result.status = "matched";
             result.reason = None;
             if let Some(path) = path.as_deref().filter(|_| !dry_run) {
@@ -850,6 +1029,7 @@ async fn cmd_artwork(
                     if initial.as_ref().map(|state| state.2) != Some(current.2) {
                         bail!("audio file changed during artwork lookup");
                     }
+                    ensure_artwork_source_unchanged(path, &lookup)?;
                     let repaired = needle_core::tag::repair_tags_with_backup(
                         path,
                         &needle_core::tag::TagRepair {
@@ -1218,6 +1398,7 @@ async fn cmd_prepare(
     artist: String,
     title: String,
     source_title: String,
+    source_duration_ms: Option<u64>,
     source_url: String,
     album: Option<String>,
     no_metadata: bool,
@@ -1236,7 +1417,7 @@ async fn cmd_prepare(
     };
     let inferred_title = source_title_for_preview(&source_title, &artist);
     let mut warnings = Vec::new();
-    let tags = if let Some(metadata) = resolved {
+    let mut tags = if let Some(metadata) = resolved {
         let conflict = requested_variant_conflicts_with_metadata(&title, &metadata.title);
         if conflict {
             warnings.push(metadata_variant_warning(&title, &metadata.title).unwrap_or("Metadata does not match the requested variant; source wording was retained.").to_string());
@@ -1257,8 +1438,8 @@ async fn cmd_prepare(
         );
         needle_core::TrackMetadata {
             artist: artist.clone(),
-            title: inferred_title,
-            album: album.filter(|v| !v.trim().is_empty()),
+            title: inferred_title.clone(),
+            album: album.as_ref().filter(|v| !v.trim().is_empty()).cloned(),
             source: needle_core::metadata::MetadataSource {
                 provider: "none".into(),
                 ..Default::default()
@@ -1266,13 +1447,90 @@ async fn cmd_prepare(
             ..Default::default()
         }
     };
+    let artwork_match = match prepare_cover_suggestion(
+        &tags,
+        &artist,
+        &source_title,
+        album.as_deref(),
+        source_duration_ms,
+        no_metadata,
+    )
+    .await
+    {
+        Ok(suggestion) => suggestion,
+        Err(error) => {
+            tracing::debug!("Source cover suggestion failed: {error}");
+            warnings.push(
+                "Album cover lookup could not finish; source artwork remains available.".into(),
+            );
+            None
+        }
+    };
+    if let Some(suggestion) = &artwork_match {
+        tags.artwork_url = Some(suggestion.artwork.url.clone());
+        tags.artwork = Some(suggestion.artwork.clone());
+        warnings.push(if suggestion.version_labels_differ {
+            format!("Suggested cover from {}; upload and catalog version labels differ. Track details were retained.", suggestion.release_title)
+        } else {
+            format!("Suggested cover from {}; review the artwork before saving. Track details were retained.", suggestion.release_title)
+        });
+    }
     let response = serde_json::json!({
         "artist": tags.artist, "title": tags.title, "album": tags.album.unwrap_or_default(),
         "album_artist": tags.artist, "artwork_url": tags.artwork_url.unwrap_or_default(),
         "source": tags.source.provider, "warnings": warnings, "source_url": source_url,
+        "artwork": tags.artwork, "artwork_match": artwork_match,
     });
     println!("{}", serde_json::to_string(&response)?);
     Ok(())
+}
+
+async fn prepare_cover_suggestion(
+    tags: &needle_core::TrackMetadata,
+    artist: &str,
+    source_title: &str,
+    requested_album: Option<&str>,
+    source_duration_ms: Option<u64>,
+    no_metadata: bool,
+) -> Result<Option<needle_core::metadata::SourceArtworkMatch>> {
+    if no_metadata
+        || tags
+            .artwork_url
+            .as_deref()
+            .is_some_and(|url| !url.trim().is_empty())
+    {
+        return Ok(None);
+    }
+    let requested_album = requested_album.filter(|album| !album.trim().is_empty());
+    let resolved_album = tags
+        .album
+        .as_deref()
+        .filter(|album| !album.trim().is_empty());
+    if let (Some(requested), Some(resolved)) = (requested_album, resolved_album) {
+        if !needle_core::metadata::same_identity(requested, resolved) {
+            return Ok(None);
+        }
+    }
+    let title = source_title_for_artwork(source_title, artist);
+    needle_core::metadata::resolve_source_artwork(
+        artist,
+        title,
+        source_duration_ms,
+        requested_album.or(resolved_album),
+    )
+    .await
+}
+
+fn source_title_for_artwork<'a>(source_title: &'a str, artist: &str) -> &'a str {
+    [" - ", " — ", " – "]
+        .into_iter()
+        .find_map(|separator| {
+            source_title
+                .split_once(separator)
+                .filter(|(prefix, _)| needle_core::metadata::same_identity(prefix, artist))
+                .map(|(_, title)| title)
+        })
+        .unwrap_or(source_title)
 }
 
 fn source_title_for_preview(source_title: &str, artist: &str) -> String {
@@ -3235,6 +3493,114 @@ esac
         assert_eq!(metadata.title, "Song (Remix)");
     }
 
+    #[tokio::test]
+    async fn prepare_cover_preserves_existing_artwork_and_no_metadata_skips_lookup() {
+        let mut tags = metadata("Artist", "Song (Weedmix)");
+        tags.album = Some("Album".into());
+        tags.artwork_url = Some("https://example.org/already-matched.jpg".into());
+        let before = serde_json::to_value(&tags).unwrap();
+        assert!(prepare_cover_suggestion(
+            &tags,
+            "Artist",
+            "Artist - Song (Weedmix)",
+            None,
+            Some(251_000),
+            false
+        )
+        .await
+        .unwrap()
+        .is_none());
+        assert_eq!(serde_json::to_value(&tags).unwrap(), before);
+        tags.artwork_url = None;
+        let before = serde_json::to_value(&tags).unwrap();
+        assert!(prepare_cover_suggestion(
+            &tags,
+            "Artist",
+            "Artist - Song (Weedmix)",
+            None,
+            Some(251_000),
+            true
+        )
+        .await
+        .unwrap()
+        .is_none());
+        assert_eq!(serde_json::to_value(&tags).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn prepare_cover_conflicting_explicit_album_skips_lookup_without_retagging() {
+        let mut tags = metadata("Artist", "Song (Weedmix)");
+        tags.album = Some("Resolved Album".into());
+        let before = serde_json::to_value(&tags).unwrap();
+        let suggestion = tokio::time::timeout(
+            Duration::from_millis(25),
+            prepare_cover_suggestion(
+                &tags,
+                "Artist",
+                "Artist - Song (Weedmix)",
+                Some("Requested Album"),
+                Some(251_000),
+                false,
+            ),
+        )
+        .await
+        .expect("album conflict must return before any network lookup")
+        .unwrap();
+        assert!(suggestion.is_none());
+        assert_eq!(serde_json::to_value(&tags).unwrap(), before);
+    }
+
+    #[test]
+    fn prepare_cover_retains_all_selected_source_version_qualifiers() {
+        for variant in [
+            "Live",
+            "Acoustic",
+            "Instrumental",
+            "Clean",
+            "Chopped",
+            "Snakehips Remix",
+            "SkrillexRemix",
+            "Weedmix",
+        ] {
+            let source = format!("Artist - Song ({variant}) [Official Video]");
+            assert_eq!(
+                source_title_for_artwork(&source, "Artist"),
+                format!("Song ({variant}) [Official Video]")
+            );
+        }
+        assert_eq!(
+            source_title_for_artwork("Other Artist - Song (Live)", "Artist"),
+            "Other Artist - Song (Live)"
+        );
+    }
+
+    #[test]
+    fn prepare_cover_duration_argument_requires_a_positive_integer() {
+        let args = [
+            "needle",
+            "prepare",
+            "Artist",
+            "Song",
+            "--source-title",
+            "Artist - Song",
+            "--url",
+            "https://example.org/source",
+            "--source-duration-ms",
+        ];
+        for invalid in ["0", "-1", "1.5"] {
+            assert!(Cli::try_parse_from(args.into_iter().chain([invalid])).is_err());
+        }
+        match Cli::try_parse_from(args.into_iter().chain(["251000"]))
+            .unwrap()
+            .command
+        {
+            Commands::Prepare {
+                source_duration_ms, ..
+            } => assert_eq!(source_duration_ms, Some(251_000)),
+            _ => panic!("expected prepare"),
+        }
+    }
+
     #[test]
     fn preview_preserves_selected_remix_wording() {
         assert_eq!(
@@ -3505,6 +3871,228 @@ esac
 #[cfg(test)]
 mod artwork_fill_tests {
     use super::*;
+
+    fn source_input(title: &str) -> ArtworkSourceInput {
+        ArtworkSourceInput {
+            source_title: Some(title.to_owned()),
+            source_duration_ms: Some(251_000),
+            source_thumbnail_url: Some("https://example.test/source.jpg".to_owned()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn existing_items_pass_normalized_source_title_and_duration_to_catalog() {
+        for (artist, title, upload) in [
+            (
+                "Wiz Khalifa",
+                "MAAN! Weedmix",
+                "Wiz Khalifa - MAAN! Weedmix (Official Audio)",
+            ),
+            (
+                "Capital STEEZ",
+                "Free the Robots",
+                "Capital STEEZ - Free The Robots [Prod. by Free The Robots]",
+            ),
+        ] {
+            let lookup = artwork_lookup(artist, title, "", None, &source_input(upload)).unwrap();
+            let artwork = resolve_backfill_artwork(&lookup, |request| async move {
+                assert_eq!(request.artist, artist);
+                assert!(needle_core::metadata::same_identity(&request.title, title));
+                assert_eq!(request.duration_ms, Some(251_000));
+                assert!(request.album.is_empty());
+                Ok(None)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(artwork.provider, "source");
+            assert!(artwork.release_id.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn source_thumbnail_follows_definitive_catalog_miss_but_never_provider_error() {
+        let lookup =
+            || artwork_lookup("Artist", "Song", "", None, &source_input("Artist - Song")).unwrap();
+        assert!(
+            resolve_backfill_artwork(&lookup(), |_| async { bail!("HTTP 503") })
+                .await
+                .is_err()
+        );
+        let catalog = needle_core::metadata::ArtworkReference {
+            url: "https://coverartarchive.org/catalog.jpg".into(),
+            provider: "cover_art_archive".into(),
+            release_id: Some("edition".into()),
+            release_group_id: None,
+        };
+        let matched = resolve_backfill_artwork(&lookup(), |_| async { Ok(Some(catalog.clone())) })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(matched.url, catalog.url);
+        for url in [
+            "file:///private/cover.png",
+            "data:image/png;base64,abc",
+            "https:///",
+            "not a URL",
+        ] {
+            assert!(source_thumbnail(url).is_none(), "accepted {url}");
+        }
+    }
+
+    #[test]
+    fn source_and_metadata_conflicts_block_catalog_and_thumbnail_lookup() {
+        for (artist, title, source) in [
+            (
+                "Kendrick Lamar",
+                "6:16 in LA (feat. Ab-Soul)",
+                "Kendrick Lamar - 6:16 in LA",
+            ),
+            (
+                "Kendrick Lamar",
+                "6:16 in LA",
+                "Kendrick Lamar - 6:16 in LA (Live at The Pop Out)",
+            ),
+            ("Artist", "Song", "Artist - Song (Snakehips Remix)"),
+        ] {
+            assert!(artwork_lookup(artist, title, "", None, &source_input(source)).is_err());
+        }
+        assert!(artwork_lookup(
+            "Kendrick Lamar",
+            "6:16 in LA",
+            "",
+            None,
+            &source_input("Kendrick Lamar - 6:16 in LA")
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn saved_sources_require_exact_expected_url_and_retain_recorded_duration() {
+        let root = std::env::temp_dir().join(format!("needle-saved-source-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("MAAN! Weedmix.mp3");
+        let url = "https://www.youtube.com/watch?v=abcdefghijk";
+        std::fs::write(
+            path.with_extension("json"),
+            serde_json::json!({
+                "selected_source": {"provider":"youtube", "id":"abcdefghijk", "url":url,
+                    "title":"Wiz Khalifa - MAAN! Weedmix", "duration_ms":251000}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut input = ArtworkSourceInput {
+            source_url: Some(url.into()),
+            ..Default::default()
+        };
+        let lookup =
+            artwork_lookup("Wiz Khalifa", "MAAN! Weedmix", "", Some(&path), &input).unwrap();
+        assert_eq!(lookup.catalog.title, "MAAN! Weedmix");
+        assert_eq!(lookup.catalog.duration_ms, Some(251_000));
+        assert_eq!(
+            lookup.thumbnail.unwrap().url,
+            "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"
+        );
+        input.source_url = Some("https://youtu.be/abcdefghijk".into());
+        assert!(artwork_lookup("Wiz Khalifa", "MAAN! Weedmix", "", Some(&path), &input).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn saved_thumbnail_requires_supported_youtube_host_and_matching_video_id() {
+        let mut evidence = ArtworkSourceEvidence {
+            provider: Some("youtube".into()),
+            id: Some("abcdefghijk".into()),
+            ..Default::default()
+        };
+        for url in [
+            "https://youtu.be/abcdefghijk",
+            "https://www.youtube.com/watch?v=abcdefghijk",
+            "https://music.youtube.com/watch?v=abcdefghijk",
+            "https://m.youtube.com/shorts/abcdefghijk",
+        ] {
+            evidence.url = Some(url.into());
+            assert!(
+                saved_source_thumbnail(&evidence).is_some(),
+                "rejected {url}"
+            );
+        }
+        for url in [
+            "https://evil.test/watch?v=abcdefghijk",
+            "https://youtube.com.evil.test/watch?v=abcdefghijk",
+            "https://youtu.be/other-video",
+            "https://www.youtube.com/watch?v=abcdefghijk&v=other-video",
+            concat!("https://user", "@youtube.com/watch?v=abcdefghijk"),
+            "https://youtube.com:8443/watch?v=abcdefghijk",
+            "https://youtube.com/watch?v=abcdefghijZ",
+            "file:///watch?v=abcdefghijk",
+        ] {
+            evidence.url = Some(url.into());
+            assert!(
+                saved_source_thumbnail(&evidence).is_none(),
+                "accepted {url}"
+            );
+        }
+        evidence.url = Some("https://youtu.be/abcdefghijk".into());
+        for id in ["short", "abcdefghij!", "../abcdefgh"] {
+            evidence.id = Some(id.into());
+            assert!(saved_source_thumbnail(&evidence).is_none());
+        }
+        evidence.id = Some("abcdefghijk".into());
+        evidence.provider = Some("other".into());
+        assert!(saved_source_thumbnail(&evidence).is_none());
+    }
+
+    #[test]
+    fn changed_provenance_rejects_the_stale_lookup_before_file_repair() {
+        let root = std::env::temp_dir().join(format!("needle-stale-source-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Song.mp3");
+        let sidecar = path.with_extension("json");
+        let mut evidence = serde_json::json!({"selected_source":{"title":"Artist - Song"}});
+        std::fs::write(&sidecar, evidence.to_string()).unwrap();
+        let lookup = artwork_lookup(
+            "Artist",
+            "Song",
+            "",
+            Some(&path),
+            &ArtworkSourceInput::default(),
+        )
+        .unwrap();
+        ensure_artwork_source_unchanged(&path, &lookup).unwrap();
+        evidence["repairs"] = serde_json::json!([{"note":"changed during lookup"}]);
+        std::fs::write(&sidecar, evidence.to_string()).unwrap();
+        assert_eq!(
+            ensure_artwork_source_unchanged(&path, &lookup)
+                .unwrap_err()
+                .to_string(),
+            "source evidence changed during artwork lookup"
+        );
+        std::fs::remove_file(sidecar).unwrap();
+        assert!(ensure_artwork_source_unchanged(&path, &lookup).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artwork_source_duration_cli_requires_positive_milliseconds() {
+        let arguments = [
+            "needle",
+            "artwork",
+            "--artist",
+            "Wiz Khalifa",
+            "--title",
+            "MAAN! Weedmix",
+            "--source-duration-ms",
+        ];
+        assert!(Cli::try_parse_from(arguments.into_iter().chain(["0"])).is_err());
+        let cli = Cli::try_parse_from(arguments.into_iter().chain(["251000"])).unwrap();
+        let Commands::Artwork { source, .. } = cli.command else {
+            panic!("expected artwork command")
+        };
+        assert_eq!(source.source_duration_ms, Some(251_000));
+    }
     #[tokio::test]
     async fn existing_manual_cover_is_preserved_without_network() {
         let path = std::env::temp_dir().join(format!(
@@ -3538,7 +4126,7 @@ mod artwork_fill_tests {
             "Not the song",
             "",
             Some(path.clone()),
-            None,
+            ArtworkSourceInput::default(),
             false,
             true,
         )

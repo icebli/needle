@@ -55,6 +55,9 @@ final class BookmarkStore {
         guard let index = items.firstIndex(where: { $0.id == original.id }),
               items[index].date == original.date,
               items[index].candidate.url == original.candidate.url,
+              items[index].candidate.title == original.candidate.title,
+              items[index].candidate.durationMs == original.candidate.durationMs,
+              items[index].candidate.thumbnailURL == original.candidate.thumbnailURL,
               items[index].artist == original.artist, items[index].title == original.title,
               items[index].album == original.album, items[index].artwork == nil else { return false }
         items[index].artwork = artwork

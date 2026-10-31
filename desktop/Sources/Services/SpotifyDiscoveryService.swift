@@ -29,13 +29,34 @@ enum CatalogAvailability: String, Codable {
 }
 
 struct DiscoveryRecording: Codable, Identifiable {
-    var id: String { candidate.provider + ":" + candidate.id }
+    var id: String { artist.id + ":" + candidate.provider + ":" + candidate.id }
     let artist: SpotifyArtist
     let title: String
     let candidate: Candidate
     let availability: CatalogAvailability
     var catalogURI: String?
     var detail: String?
+}
+
+enum DiscoverySection: String, CaseIterable {
+    case leads, unchecked, onSpotify
+
+    var title: String {
+        switch self {
+        case .leads: "Leads"
+        case .unchecked: "Unconfirmed"
+        case .onSpotify: "On Spotify"
+        }
+    }
+
+    func recordings(in recordings: [DiscoveryRecording]) -> [DiscoveryRecording] {
+        let availability: CatalogAvailability = switch self {
+        case .leads: .noMatch
+        case .unchecked: .unknown
+        case .onSpotify: .found
+        }
+        return recordings.filter { $0.availability == availability }
+    }
 }
 
 /// Read-only metadata calls through the installed Spicetify companion. Spotify
@@ -55,7 +76,7 @@ actor SpotifyDiscoveryService {
     }
 
     func catalog(artist: String, title: String) async throws -> [SpotifyCatalogTrack] {
-        let result = try await request(["catalog", artist, title])
+        let result = try await request(["catalog", artist, DiscoveryMatching.catalogTitle(title, artist: artist)])
         guard let tracks = result.tracks else { throw CLIError.message("Spotify returned no catalog result.") }
         return tracks
     }
@@ -89,8 +110,11 @@ actor SpotifyDiscoveryService {
 }
 
 enum DiscoveryMatching {
+    private static let featureMarkers = [" ft. ", " ft ", " feat. ", " feat ", " featuring ", " w/ ", "(ft. ", "(feat. ", "(featuring ", "(with ", "(w/ ", "[ft. ", "[feat. ", "[featuring ", "[with ", "[w/ "]
+
     static func normalized(_ value: String) -> String {
         value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .replacingOccurrences(of: "(?<=[\\p{L}\\p{N}])['’](?=[\\p{L}\\p{N}])", with: "", options: .regularExpression)
             .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ")
     }
 
@@ -107,9 +131,15 @@ enum DiscoveryMatching {
         }
         // Remove only complete, known upload labels. A label containing a live,
         // remix, or other version qualifier must remain part of the identity.
-        let labels = "(?:official )?(?:audio visualizer|visualizer|music video|lyric video|audio|video|lyrics)"
+        let labels = "(?:official (?:music )?video release|bonus track|(?:official )?(?:audio visualizer|visualizer|music video|lyric video|audio|video|lyrics))"
         result = result.replacingOccurrences(of: "(?i)\\(" + labels + "\\)|\\[" + labels + "\\]",
                                              with: "", options: .regularExpression)
+        let quotedPattern = "(?i)^" + NSRegularExpression.escapedPattern(for: artist) + "\\s+[\"“](.+)[\"”]\\s*$"
+        if let expression = try? NSRegularExpression(pattern: quotedPattern),
+           let match = expression.firstMatch(in: result, range: NSRange(result.startIndex..., in: result)),
+           let song = Range(match.range(at: 1), in: result) {
+            result = String(result[song])
+        }
         for separator in [" - ", " — ", " – "] {
             if let range = result.range(of: separator) {
                 let prefix = String(result[..<range.lowerBound])
@@ -146,12 +176,125 @@ enum DiscoveryMatching {
         }
     }
 
-    private static func comparableTitle(_ raw: String, artist: String) -> String {
+    static func assessingCatalog(_ recording: DiscoveryRecording, tracks: [SpotifyCatalogTrack]) -> DiscoveryRecording {
+        let match = matchingTrack(tracks, artist: recording.artist, title: recording.title)
+        var availability: CatalogAvailability = match == nil ? .noMatch : .found
+        var detail = match == nil ? "No exact artist/title/version match in Spotify’s search results. Availability varies by region." : nil
+        if match == nil, let credited = tracks.first(where: { track in
+            guard !track.artists.contains(where: { $0.id == recording.artist.id || normalized($0.name) == normalized(recording.artist.name) }),
+                  let source = explicitPerformerTitle(recording.title, credits: track.artists) else { return false }
+            return track.artists.contains { comparableTitle(source, artist: $0.name) == comparableTitle(track.name, artist: $0.name) }
+        }) {
+            availability = .unknown
+            detail = "Spotify has “\(credited.name)” credited to \(credited.artists.map(\.name).joined(separator: ", ")). \(recording.artist.name) is not listed as a performer. Review the recording credits before approving."
+        } else if match == nil, let version = tracks.first(where: { needsVersionReview(recording.title, artist: recording.artist, track: $0) }) {
+            availability = .unknown
+            detail = "Spotify has “\(version.name)” with this artist, but the upload does not fully identify that version. Review the source and Spotify version before approving."
+        }
+        if availability == .noMatch && !hasSourceArtistCredit(recording) {
+            availability = .unknown
+            detail = "The source does not clearly credit \(recording.artist.name). Review the upload’s performer credits before treating this as a discovery lead."
+        }
+        return DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
+            availability: availability, catalogURI: match?.uri, detail: detail)
+    }
+
+    private static func hasSourceArtistCredit(_ recording: DiscoveryRecording) -> Bool {
+        let artist = recording.artist.name
+        let target = normalized(artist)
+        if let uploader = recording.candidate.uploader {
+            let channel = normalized(uploader)
+            if channel == target || channel == target + " topic" { return true }
+            if uploader.lowercased().hasSuffix("vevo"),
+               normalized(String(uploader.dropLast(4))).replacingOccurrences(of: " ", with: "") == target.replacingOccurrences(of: " ", with: "") { return true }
+        }
+        let raw = recording.candidate.title
+        if raw.range(of: "(?i)^" + NSRegularExpression.escapedPattern(for: artist) + "\\s+[\"“].+[\"”](?:\\s|$)", options: .regularExpression) != nil { return true }
+        if let separator = try? NSRegularExpression(pattern: "[-–—]\\s+") {
+            for match in separator.matches(in: raw, range: NSRange(raw.startIndex..., in: raw)) {
+                guard let range = Range(match.range, in: raw) else { continue }
+                let prefix = String(raw[..<range.lowerBound]).replacingOccurrences(of: "+", with: ",")
+                if artistListContains(prefix, artist: artist) { return true }
+            }
+        }
+        for marker in featureMarkers {
+            guard let range = raw.range(of: marker, options: .caseInsensitive) else { continue }
+            var credit = String(raw[range.upperBound...])
+            if let boundary = credit.range(of: "[()\\[\\]]|\\s[-–—]\\s", options: .regularExpression) { credit = String(credit[..<boundary.lowerBound]) }
+            if artistListContains(credit.replacingOccurrences(of: "+", with: ","), artist: artist) { return true }
+        }
+        return false
+    }
+
+    private static let versionQualifiers = ["remix", "live", "acoustic", "instrumental", "edit", "version", "remaster", "extended", "sped", "slowed", "demo", "clean", "karaoke", "part", "pt"]
+
+    private static func isVersionQualifier(_ word: String) -> Bool {
+        versionQualifiers.contains(word) || word.range(of: "^(?:part|pt)[0-9]+$", options: .regularExpression) != nil
+    }
+
+    private static func versionTitle(_ raw: String, artist: String) -> (base: String, descriptor: [String])? {
+        let cleaned = catalogTitle(raw, artist: artist)
+        guard let decoration = cleaned.range(of: "(?:\\s+[-–—]\\s+[^()\\[\\]]+|\\s*\\([^()]+\\)|\\s*\\[[^\\[\\]]+\\])\\s*$", options: .regularExpression) else { return nil }
+        let descriptor = normalized(String(cleaned[decoration])).split(separator: " ").map(String.init)
+        guard descriptor.contains(where: { versionQualifiers.contains($0) }) else { return nil }
+        return (comparableTitle(String(cleaned[..<decoration.lowerBound]), artist: artist), descriptor)
+    }
+
+    private static func needsVersionReview(_ source: String, artist: SpotifyArtist, track: SpotifyCatalogTrack) -> Bool {
+        guard track.artists.contains(where: { $0.id == artist.id || normalized($0.name) == normalized(artist.name) }) else { return false }
+        return ([artist.name] + track.artists.map(\.name)).contains { credit in
+            guard let catalog = versionTitle(track.name, artist: credit) else { return false }
+            if let requested = versionTitle(source, artist: credit) {
+                return !requested.base.isEmpty && requested.base == catalog.base
+                    && !requested.descriptor.contains("extended") && catalog.descriptor.contains("extended")
+                    && catalog.descriptor.filter { $0 != "extended" } == requested.descriptor
+            }
+            let requested = comparableTitle(source, artist: credit)
+            return !requested.isEmpty && requested == catalog.base
+                && !requested.split(separator: " ").contains(where: { versionQualifiers.contains(String($0)) })
+        }
+    }
+
+    private static func explicitPerformerTitle(_ raw: String, credits: [SpotifyArtistCredit]) -> String? {
+        guard let separator = try? NSRegularExpression(pattern: "[-–—]\\s+") else { return nil }
+        let names = Set(credits.map { normalized($0.name) })
+        for match in separator.matches(in: raw, range: NSRange(raw.startIndex..., in: raw)) {
+            guard let range = Range(match.range, in: raw) else { continue }
+            let prefix = String(raw[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let performers = prefix.replacingOccurrences(of: "(?i)\\s*(?:[+&,])\\s*|\\s+(?:and|x|ft\\.?|feat\\.?|featuring)\\s+", with: "|", options: .regularExpression)
+                .components(separatedBy: "|").map { normalized($0) }
+            if names.contains(normalized(prefix)) || (!performers.isEmpty && performers.allSatisfy { !$0.isEmpty && names.contains($0) }) {
+                return String(raw[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return nil
+    }
+
+    static func catalogTitle(_ raw: String, artist: String) -> String {
         var cleaned = title(raw, artist: artist)
-        let versionWords = ["remix", "live", "acoustic", "instrumental", "edit", "version", "remaster", "extended", "sped", "slowed"]
+        for (opening, closing) in [("(", ")"), ("[", "]")] {
+            let pattern = NSRegularExpression.escapedPattern(for: opening)
+                + "\\s*(?:prod\\.?\\s+(?:by\\s+)?|produced\\s+by\\s+)([^()\\[\\]]+)"
+                + NSRegularExpression.escapedPattern(for: closing)
+            guard let expression = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
+            for match in expression.matches(in: cleaned, range: NSRange(cleaned.startIndex..., in: cleaned)).reversed() {
+                guard let range = Range(match.range, in: cleaned), let content = Range(match.range(at: 1), in: cleaned),
+                      cleaned[content].range(of: "\\s[-–—]\\s", options: .regularExpression) == nil else { continue }
+                let nesting = cleaned[..<range.lowerBound].reduce(0) { depth, character in
+                    depth + ((character == "(" || character == "[") ? 1 : (character == ")" || character == "]") ? -1 : 0)
+                }
+                let words = normalized(String(cleaned[content])).split(separator: " ").map(String.init)
+                guard nesting == 0, !words.contains(where: isVersionQualifier) else { continue }
+                cleaned.removeSubrange(range)
+            }
+        }
+        if let credit = cleaned.range(of: "(?i)\\s+prod\\s+by[;:]\\s+[^()\\[\\]]+$", options: .regularExpression),
+           cleaned[credit].range(of: "\\s[-–—]\\s", options: .regularExpression) == nil {
+            cleaned = String(cleaned[..<credit.lowerBound])
+        }
         // Remove a featured/with-artist decoration, but retain a meaningful
         // parenthesized version that follows it ("feat. X (Live)").
-        for marker in [" ft. ", " ft ", " feat. ", " feat ", " featuring ", "(ft. ", "(feat. ", "(featuring ", "[ft. ", "[feat. ", "[featuring ", "(with ", "[with "] {
+        for marker in featureMarkers {
             if let range = cleaned.range(of: marker, options: .caseInsensitive) {
                 let prefix = String(cleaned[..<range.lowerBound])
                 let suffix = String(cleaned[range.upperBound...])
@@ -160,34 +303,30 @@ enum DiscoveryMatching {
                     if let end = suffix.firstIndex(of: closing) {
                         let credit = String(suffix[..<end])
                         let tail = String(suffix[suffix.index(after: end)...])
-                        if normalized(credit).split(separator: " ").contains(where: { versionWords.contains(String($0)) }) {
-                            // A version can be inside the credit's brackets.
-                            // Keep ambiguous/nested content rather than matching studio audio.
-                            if let separator = credit.range(of: "\\s[-–—]\\s", options: .regularExpression) {
-                                cleaned = prefix + " " + credit[separator.upperBound...] + " " + tail
-                            }
-                        } else {
+                        if let separator = credit.range(of: "\\s[-–—]\\s", options: .regularExpression) {
+                            cleaned = prefix + " " + credit[separator.upperBound...] + " " + tail
+                        } else if !credit.contains("("), !credit.contains("["),
+                            !normalized(credit).split(separator: " ").contains(where: { isVersionQualifier(String($0)) }) {
                             cleaned = prefix + " " + tail
                         }
                     }
                 } else if let versionStart = suffix.firstIndex(where: { $0 == "(" || $0 == "[" }) {
                     cleaned = prefix + String(suffix[versionStart...])
+                } else if let separator = suffix.range(of: "\\s[-–—]\\s", options: .regularExpression) {
+                    cleaned = prefix + " " + suffix[separator.upperBound...]
                 } else {
                     let words = normalized(suffix).split(separator: " ")
-                    if let versionIndex = words.firstIndex(where: { versionWords.contains(String($0)) }) {
-                        // Keep the remixer's name before "Remix", when separated
-                        // from the artist credit ("feat. X - DJ Y Remix").
-                        let versionTail = suffix.range(of: "\\s[-–—]\\s", options: .regularExpression)
-                        cleaned = prefix + " " + (versionTail.map { String(suffix[$0.upperBound...]) }
-                            ?? words[versionIndex...].joined(separator: " "))
-                    } else {
-                        cleaned = prefix
-                    }
+                    if !words.contains(where: { isVersionQualifier(String($0)) }) { cleaned = prefix }
                 }
                 break
             }
         }
-        var value = normalized(cleaned)
+        cleaned = cleaned.replacingOccurrences(of: "(?i)\\s+[-–—]\\s+bonus track\\s*$", with: "", options: .regularExpression)
+        return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func comparableTitle(_ raw: String, artist: String) -> String {
+        var value = normalized(catalogTitle(raw, artist: artist))
         // "Audio" and its official/lyrics decorations identify the upload,
         // not a distinct recording. Strip only trailing neutral decorations;
         // remix/live/version tokens remain part of the identity.
@@ -200,9 +339,9 @@ enum DiscoveryMatching {
     private static func artistListContains(_ prefix: String, artist: String) -> Bool {
         let target = normalized(artist)
         guard !target.isEmpty else { return false }
-        let list = prefix.replacingOccurrences(of: " & ", with: ",")
-            .replacingOccurrences(of: " and ", with: ",")
-            .replacingOccurrences(of: " x ", with: ",")
+        let feature = prefix.range(of: "(?i)\\s+(?:ft\\.?|feat\\.?|featuring)\\s+", options: .regularExpression)
+        let performers = feature.map { String(prefix[..<$0.lowerBound]) } ?? prefix
+        let list = performers.replacingOccurrences(of: "(?i)\\s+(?:&|and|x)\\s+", with: ",", options: .regularExpression)
             .components(separatedBy: ",")
         return list.contains { normalized($0.trimmingCharacters(in: .whitespacesAndNewlines)) == target }
     }

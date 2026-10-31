@@ -2,6 +2,15 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.10.2
+
+- Match release artwork using selected-source evidence when upload and catalog version labels differ, with duration checks for those differences.
+- Use the same artwork matching for existing bookmarks and saved tracks, and retry previous misses after upgrading.
+- Fall back to artwork from the exact selected source when no compatible catalog cover is found.
+- Preserve existing covers, explicitly cleared artwork, recording metadata, and audio while filling missing covers.
+- Select source artwork automatically in metadata review when no release cover is available.
+- Require corroborating artist evidence in Discover and keep Spotify lookup failures separate from confirmed absence.
+
 ## 0.10.1
 
 - Fill missing artwork for bookmarks and saved recordings using verified recording and release identities.

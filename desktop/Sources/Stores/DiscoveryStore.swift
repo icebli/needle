@@ -14,6 +14,58 @@ final class DiscoveryStore {
     var warnings: [String] = []
     var catalogNotice: String?
     var lastSynced: Date?
+    private(set) var run: Run?
+    static let candidatesPerArtist = 45
+
+    enum RunPhase: String, Codable {
+        case sources, catalog, completed, cancelled, interrupted
+    }
+
+    struct Run: Codable {
+        var phase: RunPhase
+        let selectedArtistIDs: [String]
+        var artistsAttempted = 0
+        var artistsCompleted = 0
+        var sourceFailures = 0
+        var sourceNotices = 0
+        var catalogChecked = 0
+        var catalogFailure: String?
+    }
+
+    var runSummary: String? {
+        guard let run else {
+            return hasSearched ? "Previous search coverage is unknown. Find recordings to search your selection." : nil
+        }
+        let total = run.selectedArtistIDs.count
+        var parts: [String] = []
+        switch run.phase {
+        case .sources:
+            parts.append("Searching artists \(run.artistsAttempted) of \(total).")
+        case .catalog, .completed:
+            if run.artistsCompleted == total {
+                parts.append("Searched all \(total) selected artists.")
+            } else {
+                parts.append("Completed \(run.artistsCompleted) of \(total) selected artist searches.")
+            }
+        case .cancelled:
+            parts.append("Search stopped. Completed \(run.artistsCompleted) of \(total) artist searches.")
+        case .interrupted:
+            parts.append("Search interrupted. Completed \(run.artistsCompleted) of \(total) artist searches.")
+        }
+        if run.sourceFailures > 0 { parts.append("\(run.sourceFailures) source searches failed.") }
+        if run.sourceNotices > 0 { parts.append("\(run.sourceNotices) source search notices; coverage may be incomplete.") }
+        parts.append("\(recordings.count) recordings found.")
+        let unknown = recordings.filter { $0.availability == .unknown }.count
+        if run.catalogFailure != nil && unknown > 0 { parts.append("Spotify checks paused. Open Spotify, then use Refresh all.") }
+        parts.append("Spotify resolved \(recordings.count - unknown) of \(recordings.count); \(unknown) unconfirmed.")
+        return parts.joined(separator: " ")
+    }
+
+    var runNeedsAttention: Bool {
+        guard let run else { return hasSearched }
+        return run.phase == .cancelled || run.phase == .interrupted || run.sourceFailures > 0 || run.sourceNotices > 0
+            || (run.catalogFailure != nil && recordings.contains { $0.availability == .unknown })
+    }
     private let spotify = SpotifyDiscoveryService()
     private let cli = NeedleCLIService()
     private var task: Task<Void, Never>?
@@ -26,6 +78,8 @@ final class DiscoveryStore {
         let hasSearched: Bool?
         let warnings: [String]?
         let error: String?
+        let selectedArtistIDs: Set<String>?
+        let run: Run?
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -35,7 +89,12 @@ final class DiscoveryStore {
             hasSearched = value.hasSearched ?? !value.recordings.isEmpty
             warnings = value.warnings ?? []
             error = value.error
-            selectedArtistIDs = Set(artists.prefix(3).map(\.id))
+            selectedArtistIDs = value.selectedArtistIDs ?? Set(artists.prefix(3).map(\.id))
+            run = value.run
+            if run?.phase == .sources || run?.phase == .catalog {
+                run?.phase = .interrupted
+                persist()
+            }
         }
     }
 
@@ -53,67 +112,121 @@ final class DiscoveryStore {
         }
     }
 
-    func find(settings: NeedleSettings, library: [TrackRequest], sourceLookup: ((String) async throws -> [Candidate])? = nil) {
+    func find(settings: NeedleSettings, library: [TrackRequest], sourceLookup: (@MainActor (String) async throws -> [Candidate])? = nil,
+              catalogLookup: (@MainActor (String, String) async throws -> [SpotifyCatalogTrack])? = nil) {
         guard !isSearching, !isSyncing else { return }
         let selection = artists.filter { selectedArtistIDs.contains($0.id) }
         guard !selection.isEmpty else { error = "Select artists to search."; return }
         isSearching = true; hasSearched = true; error = nil; catalogNotice = nil; warnings = []; recordings = []
+        run = Run(phase: .sources, selectedArtistIDs: selection.map(\.id))
+        persist()
         task = Task {
-            defer { isSearching = false; progress = ""; persist() }
-            var seen = Set<String>()
-            var sourceFailures: [String] = []
-            for (artistIndex, artist) in selection.enumerated() {
-                guard !Task.isCancelled else { return }
-                progress = "Artist \(artistIndex + 1)/\(selection.count): finding popular uploads for \(artist.name)…"
-                struct Sources: Decodable { let ok: Bool; let candidates: [Candidate]; let warnings: [String]? }
-                do {
-                    let response: Sources
-                    if let sourceLookup {
-                        response = Sources(ok: true, candidates: try await sourceLookup(artist.name), warnings: nil)
-                    } else {
-                        let data = try await cli.runJSONCommand(["discover", artist.name, "--json", "--source", settings.provider], settings: settings)
-                        response = try NeedleCLIService.parseLastJSON(Sources.self, data: data)
-                    }
-                    guard response.ok else { throw CLIError.message("Source search failed for \(artist.name).") }
-                    warnings.append(contentsOf: response.warnings ?? [])
-                    for candidate in response.candidates.prefix(Self.candidateLimit(artistCount: selection.count)) {
-                        guard !Task.isCancelled else { return }
-                        let title = DiscoveryMatching.title(candidate.title, artist: artist.name)
-                        let key = artist.id + ":" + DiscoveryMatching.normalized(title)
-                        guard !title.isEmpty, AppModel.mediaURL(candidate.url) != nil,
-                              !seen.contains(key),
-                              !DiscoveryMatching.isInLibrary(candidate: candidate, artist: artist.name, title: title, tracks: library) else { continue }
-                        seen.insert(key)
-                        progress = "Artist \(artistIndex + 1)/\(selection.count): checking Spotify — \(artist.name) — \(title)"
-                        var result = DiscoveryRecording(artist: artist, title: title, candidate: candidate, availability: .unknown)
-                        do {
-                            let tracks = try await spotify.catalog(artist: artist.name, title: title)
-                            if let match = DiscoveryMatching.matchingTrack(tracks, artist: artist, title: title) {
-                                result = DiscoveryRecording(artist: artist, title: title, candidate: candidate, availability: .found, catalogURI: match.uri)
-                            } else {
-                                result = DiscoveryRecording(artist: artist, title: title, candidate: candidate, availability: .noMatch,
-                                    detail: "No exact artist/title match in Spotify’s search results. Availability varies by region; check version names before approving.")
-                            }
-                        } catch {
-                            result.detail = error.localizedDescription
-                            warnings.append("Spotify catalog check stopped: \(error.localizedDescription)")
-                            recordings.append(result)
-                            // A failed authentication/rate-limit check is not evidence
-                            // of absence. Stop rather than hammering the same service.
-                            return
-                        }
-                        recordings.append(result)
-                        try await Task.sleep(for: .milliseconds(350))
-                    }
-                } catch is CancellationError { return }
-                catch {
-                    warnings.append("\(artist.name): \(error.localizedDescription)")
-                    sourceFailures.append(artist.name)
+            defer {
+                let stopped = Task.isCancelled || run?.phase == .cancelled
+                run?.phase = stopped ? .cancelled : .completed
+                recordings.sort { ($0.candidate.viewCount ?? 0) > ($1.candidate.viewCount ?? 0) }
+                isSearching = false; progress = ""; persist()
+            }
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    await self.collectSources(selection: selection, settings: settings, library: library, lookup: sourceLookup)
+                }
+                group.addTask {
+                    await self.checkCatalog(lookup: catalogLookup)
                 }
             }
-            recordings.sort { ($0.candidate.viewCount ?? 0) > ($1.candidate.viewCount ?? 0) }
-            if !sourceFailures.isEmpty {
-                error = "Couldn’t search \(sourceFailures.joined(separator: ", ")). Check the source setup and try again."
+        }
+    }
+
+    private func collectSources(selection: [SpotifyArtist], settings: NeedleSettings, library: [TrackRequest],
+                                lookup: (@MainActor (String) async throws -> [Candidate])?) async {
+        defer {
+            if run?.phase == .sources { run?.phase = .catalog }
+            persist()
+        }
+        var seen = Set<String>()
+        var sourceFailures: [String] = []
+        for (artistIndex, artist) in selection.enumerated() {
+            guard !Task.isCancelled else { return }
+            run?.artistsAttempted += 1
+            persist()
+            progress = "Artist \(artistIndex + 1)/\(selection.count): finding popular uploads for \(artist.name)…"
+            struct Sources: Decodable { let ok: Bool; let candidates: [Candidate]; let warnings: [String]? }
+            do {
+                let response: Sources
+                if let lookup {
+                    response = Sources(ok: true, candidates: try await lookup(artist.name), warnings: nil)
+                } else {
+                    let data = try await cli.runJSONCommand(["discover", artist.name, "--json", "--source", settings.provider], settings: settings)
+                    response = try NeedleCLIService.parseLastJSON(Sources.self, data: data)
+                }
+                try Task.checkCancellation()
+                guard response.ok else { throw CLIError.message("Source search failed for \(artist.name).") }
+                warnings.append(contentsOf: response.warnings ?? [])
+                run?.sourceNotices += response.warnings?.count ?? 0
+                var accepted = 0
+                for candidate in response.candidates {
+                    guard !Task.isCancelled else { return }
+                    guard accepted < Self.candidatesPerArtist else { break }
+                    let title = DiscoveryMatching.title(candidate.title, artist: artist.name)
+                    let key = artist.id + ":" + DiscoveryMatching.normalized(title)
+                    guard !title.isEmpty, AppModel.mediaURL(candidate.url) != nil,
+                          !seen.contains(key),
+                          !DiscoveryMatching.isInLibrary(candidate: candidate, artist: artist.name, title: title, tracks: library) else { continue }
+                    seen.insert(key)
+                    recordings.append(DiscoveryRecording(artist: artist, title: title, candidate: candidate, availability: .unknown))
+                    accepted += 1
+                }
+                run?.artistsCompleted += 1
+            } catch is CancellationError { run?.phase = .cancelled; return }
+            catch {
+                guard !Task.isCancelled else { return }
+                warnings.append("\(artist.name): \(error.localizedDescription)")
+                sourceFailures.append(artist.name)
+                run?.sourceFailures += 1
+                self.error = "Couldn’t search \(sourceFailures.joined(separator: ", ")). Check the source setup and try again."
+            }
+            persist()
+        }
+    }
+
+    private func checkCatalog(lookup: (@MainActor (String, String) async throws -> [SpotifyCatalogTrack])?) async {
+        var index = 0
+        var lastCheckpoint = ContinuousClock.now
+        defer { persist() }
+        while !Task.isCancelled {
+            guard index < recordings.count else {
+                guard run?.phase == .sources else { return }
+                do { try await Task.sleep(for: .milliseconds(200)) }
+                catch { return }
+                continue
+            }
+            let recording = recordings[index]
+            do {
+                try Task.checkCancellation()
+                if run?.phase == .catalog {
+                    progress = "Checking Spotify \(index + 1)/\(recordings.count): \(recording.artist.name) — \(recording.title)"
+                }
+                let tracks: [SpotifyCatalogTrack]
+                if let lookup { tracks = try await lookup(recording.artist.name, recording.title) }
+                else { tracks = try await spotify.catalog(artist: recording.artist.name, title: recording.title) }
+                try Task.checkCancellation()
+                recordings[index] = DiscoveryMatching.assessingCatalog(recording, tracks: tracks)
+                run?.catalogChecked += 1
+                if index == 0 || (index + 1).isMultiple(of: 25) || lastCheckpoint.duration(to: .now) >= .seconds(2) {
+                    persist()
+                    lastCheckpoint = .now
+                }
+                index += 1
+                if lookup == nil { try await Task.sleep(for: .milliseconds(350)) }
+            } catch is CancellationError { run?.phase = .cancelled; return }
+            catch {
+                guard !Task.isCancelled else { return }
+                recordings[index].detail = error.localizedDescription
+                run?.catalogFailure = error.localizedDescription
+                warnings.append("Spotify catalog checks paused: \(error.localizedDescription)")
+                persist()
+                return
             }
         }
     }
@@ -130,14 +243,11 @@ final class DiscoveryStore {
                 if let lookup { tracks = try await lookup(recording.artist.name, recording.title) }
                 else { tracks = try await spotify.catalog(artist: recording.artist.name, title: recording.title) }
                 guard !Task.isCancelled else { return }
-                if let match = DiscoveryMatching.matchingTrack(tracks, artist: recording.artist, title: recording.title) {
-                    updated = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
-                        availability: .found, catalogURI: match.uri)
-                    catalogNotice = "Found on Spotify: \(recording.title)."
-                } else {
-                    updated = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
-                        availability: .noMatch, detail: "The check completed with no exact artist/title match. Alternate titles, versions, or regional availability can affect results.")
-                    catalogNotice = "Check complete: no exact Spotify match for \(recording.title)."
+                updated = DiscoveryMatching.assessingCatalog(recording, tracks: tracks)
+                switch updated.availability {
+                case .found: catalogNotice = "Found on Spotify: \(recording.title)."
+                case .noMatch: catalogNotice = "Check complete: no exact Spotify match for \(recording.title)."
+                case .unknown: catalogNotice = updated.detail
                 }
             } catch {
                 updated = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
@@ -157,6 +267,7 @@ final class DiscoveryStore {
             defer { isSearching = false; progress = ""; persist() }
             var checked = 0
             var found = 0
+            var unconfirmed = 0
             for (index, recording) in pending.enumerated() {
                 do {
                     try Task.checkCancellation()
@@ -165,13 +276,11 @@ final class DiscoveryStore {
                     if let lookup { tracks = try await lookup(recording.artist.name, recording.title) }
                     else { tracks = try await spotify.catalog(artist: recording.artist.name, title: recording.title) }
                     try Task.checkCancellation()
-                    let match = DiscoveryMatching.matchingTrack(tracks, artist: recording.artist, title: recording.title)
-                    var updated = DiscoveryRecording(artist: recording.artist, title: recording.title, candidate: recording.candidate,
-                        availability: match == nil ? .noMatch : .found, catalogURI: match?.uri)
-                    if match == nil { updated.detail = "No exact artist/title/version match in Spotify’s search results. Availability varies by region." }
+                    let updated = DiscoveryMatching.assessingCatalog(recording, tracks: tracks)
                     recordings[index] = updated
                     checked += 1
-                    if match != nil { found += 1 }
+                    if updated.availability == .found { found += 1 }
+                    if updated.availability == .unknown { unconfirmed += 1 }
                     if checked < pending.count { try await Task.sleep(for: .milliseconds(350)) }
                 } catch is CancellationError {
                     catalogNotice = "Spotify refresh stopped. Completed \(checked) of \(pending.count) checks."
@@ -189,22 +298,24 @@ final class DiscoveryStore {
                     return
                 }
             }
-            catalogNotice = "Refreshed \(checked) Spotify checks: \(found) found, \(checked - found) without an exact match."
+            let reviewNotice = unconfirmed > 0 ? " \(unconfirmed) need review." : ""
+            catalogNotice = "Refreshed \(checked) Spotify checks: \(found) found, \(checked - found - unconfirmed) without an exact match." + reviewNotice
         }
-    }
-
-    static func candidateLimit(artistCount: Int) -> Int {
-        max(1, 45 / max(1, artistCount))
     }
 
     func cancel() {
         task?.cancel()
+        if run?.phase == .sources || run?.phase == .catalog {
+            run?.phase = .cancelled
+            persist()
+        }
         Task { await cli.cancel() }
     }
 
     private func persist() {
         if let data = try? JSONEncoder().encode(Snapshot(artists: artists, recordings: recordings, lastSynced: lastSynced,
-                                                         hasSearched: hasSearched, warnings: warnings, error: error)) {
+                                                         hasSearched: hasSearched, warnings: warnings, error: error,
+                                                         selectedArtistIDs: selectedArtistIDs, run: run)) {
             defaults.set(data, forKey: "needle.discovery")
         }
     }

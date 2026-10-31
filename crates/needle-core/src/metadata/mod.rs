@@ -2,6 +2,8 @@ mod strict_artwork;
 pub use strict_artwork::{resolve_artwork, same_identity};
 mod artwork;
 pub use artwork::ArtworkReference;
+mod source_artwork;
+pub use source_artwork::{resolve_source_artwork, SourceArtworkMatch};
 
 use crate::normalize::normalize_title;
 use anyhow::Result;

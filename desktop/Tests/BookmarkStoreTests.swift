@@ -32,4 +32,26 @@ final class BookmarkStoreTests: XCTestCase {
         XCTAssertEqual(queue.selected?.response?.candidates.first?.candidate.url, candidate.url)
         XCTAssertEqual(queue.selected?.response?.metadata?.album, "Album")
     }
+
+    func testArtworkResultCannotApplyAfterSourceEvidenceChanges() throws {
+        let suite = "NeedleBookmarkEvidence.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let candidate = Candidate(provider: "youtube", id: "abc", url: "https://youtube.com/watch?v=abc", title: "Artist - Song", uploader: "Artist", durationMs: 180_000, thumbnailURL: "https://example.com/original.jpg")
+        let original = ReleaseBookmark(artist: "Artist", title: "Song", candidate: candidate)
+        let cover = ArtworkReference(url: "https://example.com/cover.jpg", provider: "source", releaseId: nil, releaseGroupId: nil)
+        for field in ["title", "duration", "thumbnail"] {
+            let changed = Candidate(provider: candidate.provider, id: candidate.id, url: candidate.url,
+                title: field == "title" ? "Artist - Song (Live)" : candidate.title, uploader: candidate.uploader,
+                durationMs: field == "duration" ? 240_000 : candidate.durationMs,
+                thumbnailURL: field == "thumbnail" ? "https://example.com/changed.jpg" : candidate.thumbnailURL)
+            let replacement = ReleaseBookmark(artist: original.artist, title: original.title, candidate: changed, date: original.date)
+            defaults.set(try JSONEncoder().encode([replacement]), forKey: "needle.bookmarks")
+            let updated = BookmarkStore(defaults: defaults)
+            XCTAssertFalse(updated.fillArtwork(cover, for: original), field)
+            XCTAssertNil(updated.items.first?.artwork)
+        }
+        defaults.set(try JSONEncoder().encode([original]), forKey: "needle.bookmarks")
+        XCTAssertTrue(BookmarkStore(defaults: defaults).fillArtwork(cover, for: original))
+    }
 }

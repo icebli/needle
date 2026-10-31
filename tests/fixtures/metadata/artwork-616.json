@@ -1,0 +1,70 @@
+{
+  "count": 3,
+  "recordings": [
+    {
+      "id": "d97d7fe2-108d-4b2e-b338-893855420989",
+      "title": "6:16 in LA",
+      "artist-credit": [{"name": "Kendrick Lamar"}],
+      "releases": [{
+        "id": "be60d656-92bb-4c2f-a1f6-b8cfd16565f7",
+        "title": "The Whole Bloody Affair",
+        "date": "2024",
+        "status": "Bootleg",
+        "release-group": {
+          "id": "87df31e6-748a-4e8a-9cd8-3518d37c5c19",
+          "title": "The Whole Bloody Affair",
+          "primary-type": "Album",
+          "secondary-types": ["Mixtape/Street"]
+        }
+      }]
+    },
+    {
+      "id": "88b816c6-3dd2-4fe5-8c53-a40aef20b9c6",
+      "title": "6:16 in LA",
+      "length": 224000,
+      "artist-credit": [{"name": "Kendrick Lamar"}],
+      "releases": [
+        {
+          "id": "d4b5d53e-35c4-42f0-9e96-8211d65c2e06",
+          "title": "Civil War",
+          "status": "Bootleg",
+          "release-group": {
+            "id": "0c6b04e2-afc1-4890-b235-0afeea81722d",
+            "title": "Civil War",
+            "primary-type": "Album",
+            "secondary-types": ["Compilation"]
+          }
+        },
+        {
+          "id": "1dd02b5d-79bf-47ad-8b34-50cd71c251da",
+          "title": "6:16 in LA",
+          "date": "2024-05-03",
+          "status": "Official",
+          "release-group": {
+            "id": "3f429571-4b49-4625-8cc3-de2b6ae2bc18",
+            "title": "6:16 in LA",
+            "primary-type": "Single"
+          }
+        }
+      ]
+    },
+    {
+      "id": "2942cac8-7158-46e7-9429-d720130a9b74",
+      "title": "6:16 in LA",
+      "length": 153000,
+      "artist-credit": [{"name": "Kendrick Lamar"}, {"name": "Ab‐Soul"}],
+      "releases": [{
+        "id": "98cad7f4-545a-4b50-81d2-d24e93ce09ef",
+        "title": "The Pop Out: Ken & Friends",
+        "date": "2024-06-19",
+        "status": "Bootleg",
+        "release-group": {
+          "id": "ae919489-dc7f-46f7-a520-279357230b09",
+          "title": "The Pop Out: Ken & Friends",
+          "primary-type": "Album",
+          "secondary-types": ["Live"]
+        }
+      }]
+    }
+  ]
+}

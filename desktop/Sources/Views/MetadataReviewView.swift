@@ -22,6 +22,17 @@ struct MetadataDraft: Codable, Identifiable {
         return local
     }
 
+    @MainActor func applyingDefaultSourceArtwork(from candidate: Candidate) -> Self {
+        guard artworkURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              artworkSuppressed != true,
+              sourceURL == candidate.url,
+              let thumbnail = candidate.thumbnailURL,
+              AppModel.mediaURL(thumbnail) != nil else { return self }
+        var draft = self
+        draft.artworkURL = thumbnail
+        return draft
+    }
+
     enum CodingKeys: String, CodingKey {
         case artist
         case title
@@ -45,7 +56,7 @@ struct MetadataReviewView: View {
 
     init(draft: MetadataDraft, candidate: CandidateResult, onCancel: @escaping () -> Void,
          onConfirm: @escaping (MetadataDraft) -> Void) {
-        _draft = State(initialValue: draft)
+        _draft = State(initialValue: draft.applyingDefaultSourceArtwork(from: candidate.candidate))
         self.candidate = candidate
         self.onCancel = onCancel
         self.onConfirm = onConfirm
@@ -112,7 +123,8 @@ struct MetadataReviewView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                     HStack {
-                        if let source = candidate.candidate.thumbnailURL, AppModel.mediaURL(source) != nil {
+                        if let source = candidate.candidate.thumbnailURL, source != draft.artworkURL,
+                           AppModel.mediaURL(source) != nil {
                             Button("Use source artwork") { draft.artworkURL = source }
                         }
                         Button("Choose image…", action: chooseArtwork)

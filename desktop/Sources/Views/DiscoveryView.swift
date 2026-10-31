@@ -2,14 +2,14 @@ import SwiftUI
 
 struct DiscoveryView: View {
     let model: AppModel
-    @State private var showCatalogMatches = false
+    @State private var section = DiscoverySection.leads
     @State private var showArtists = false
     @State private var showSetup = false
     private var store: DiscoveryStore { model.discovery }
     private var busy: Bool { store.isSyncing || store.isSearching }
     private var selectedArtists: [SpotifyArtist] { store.artists.filter { store.selectedArtistIDs.contains($0.id) } }
     private var visible: [DiscoveryRecording] {
-        store.recordings.filter { showCatalogMatches || $0.availability != .found }
+        section.recordings(in: store.recordings).sorted { ($0.candidate.viewCount ?? 0) > ($1.candidate.viewCount ?? 0) }
     }
     private var artistSummary: String {
         let names = selectedArtists.prefix(2).map(\.name).joined(separator: ", ")
@@ -68,24 +68,15 @@ struct DiscoveryView: View {
                     }.buttonStyle(.borderedProminent).tint(.orange)
                         .disabled(selectedArtists.isEmpty || busy)
                 }
-                HStack(spacing: 14) {
-                    Image(systemName: "sparkles.rectangle.stack")
-                        .font(.title2)
-                        .foregroundStyle(.orange)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Your listening room")
-                            .font(.headline)
-                        Text("Compare the source, listen briefly, then choose what belongs in your library.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text("\(visible.count) to review")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                if let summary = store.runSummary {
+                    Label(summary, systemImage: store.runNeedsAttention ? "exclamationmark.circle" : "magnifyingglass")
+                        .font(.callout)
+                        .foregroundStyle(store.runNeedsAttention ? Color.orange : Color.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
-                .padding(16)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 if store.isSearching || store.isSyncing {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
@@ -95,10 +86,11 @@ struct DiscoveryView: View {
                     }.font(.callout).foregroundStyle(.secondary)
                 }
                 HStack {
-                    Picker("Recordings", selection: $showCatalogMatches) {
-                        Text("To review (\(store.recordings.filter { $0.availability != .found }.count))").tag(false)
-                        Text("All recordings (\(store.recordings.count))").tag(true)
-                    }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 320)
+                    Picker("Recordings", selection: $section) {
+                        ForEach(DiscoverySection.allCases, id: \.self) { section in
+                            Text("\(section.title) (\(section.recordings(in: store.recordings).count))").tag(section)
+                        }
+                    }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 480)
                     Spacer()
                     if !store.recordings.isEmpty {
                         Text("Most played first").font(.caption).foregroundStyle(.secondary)
@@ -109,8 +101,8 @@ struct DiscoveryView: View {
                     HStack {
                         Text(notice).lineLimit(2)
                         Spacer()
-                        if notice.hasPrefix("Found on Spotify"), !showCatalogMatches {
-                            Button("Show match") { showCatalogMatches = true }
+                        if notice.hasPrefix("Found on Spotify"), section != .onSpotify {
+                            Button("Show match") { section = .onSpotify }
                         }
                     }.font(.callout).foregroundStyle(.secondary)
                 }
@@ -152,7 +144,7 @@ struct DiscoveryView: View {
                 Button("Select all") { store.selectedArtistIDs = Set(store.artists.map(\.id)) }
                 Button("Clear") { store.selectedArtistIDs.removeAll() }
             }.disabled(busy)
-            Text("Select any number of artists. Fewer artists gives each a deeper search.").font(.callout).foregroundStyle(.secondary)
+            Text("Every selected artist gets the same search depth, up to \(DiscoveryStore.candidatesPerArtist) recordings. Spotify checks run as results arrive.").font(.callout).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(Array(store.artists.enumerated()), id: \.element.id) { index, artist in
@@ -174,17 +166,24 @@ struct DiscoveryView: View {
     }
 
     private var emptyTitle: String {
-        if busy { return "Finding recordings…" }
-        if store.error != nil { return "Search needs attention" }
-        if !store.recordings.isEmpty { return "These recordings are already on Spotify" }
-        return store.hasSearched ? "Nothing new found" : "Explore your artists"
+        switch section {
+        case .unchecked: return "No unconfirmed recordings"
+        case .onSpotify: return "No Spotify matches yet"
+        case .leads:
+            if busy || !DiscoverySection.unchecked.recordings(in: store.recordings).isEmpty { return "No checked leads yet" }
+            if store.error != nil || store.runNeedsAttention { return "Search needs attention" }
+            return store.hasSearched ? "No new leads found" : "Explore your artists"
+        }
     }
     private var emptyDescription: String {
-        if busy { return "Results appear here as each recording is checked." }
-        if store.error != nil { return "Check the message above, then try again." }
-        if !store.recordings.isEmpty { return "View All recordings to open a Spotify match, or try another artist." }
-        if store.hasSearched { return "Try another artist or source. Recordings already in your Library are skipped." }
-        return "Choose artists and find recordings. Preview anything you like before saving."
+        switch section {
+        case .unchecked: return "Source results awaiting a successful catalog or version check appear here."
+        case .onSpotify: return "Recordings matched to Spotify appear here and are excluded from Leads."
+        case .leads:
+            if busy { return "Leads appear after a successful Spotify check. Pending checks and ambiguous recording versions stay in Unconfirmed." }
+            if store.error != nil || store.runNeedsAttention { return "Check the search status above. Unconfirmed recordings are kept separately from discovery leads." }
+            return "Only recordings checked without an exact Spotify match appear here. This is a lead to review, not proof of unavailability."
+        }
     }
 }
 
@@ -221,7 +220,8 @@ private struct DiscoveryRecordingRow: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(recording.availability == .unknown ? .orange : .secondary)
                 if recording.availability == .unknown {
-                    Text("The check failed; this does not mean the song is absent.").font(.caption).foregroundStyle(.secondary)
+                    Text(recording.detail ?? "Spotify availability has not been confirmed.")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
                 HStack(spacing: 12) {
                     Button {

@@ -19,7 +19,10 @@ final class ArtworkBackfillTests: XCTestCase {
             XCTAssertEqual(request.album, "The Album"); XCTAssertEqual(request.title, "Song (Remix)")
             XCTAssertNil(request.path)
             XCTAssertEqual(request.sourceTitle, original.candidate.title)
-            XCTAssertEqual(Array(request.arguments.suffix(2)), ["--source-title", original.candidate.title])
+            XCTAssertEqual(request.sourceDurationMs, original.candidate.durationMs)
+            XCTAssertEqual(request.sourceURL, original.candidate.url)
+            XCTAssertTrue(request.arguments.contains("--source-duration-ms"))
+            XCTAssertEqual(Array(request.arguments.suffix(2)), ["--source-url", original.candidate.url])
             return ArtworkBackfillResponse(ok: true, artwork: self.cover, status: "matched", error: nil)
         })
         await service.run(bookmarks: bookmarks, history: history, settings: NeedleSettings())
@@ -58,9 +61,9 @@ final class ArtworkBackfillTests: XCTestCase {
         }
         await ArtworkBackfillService(defaults: defaults, lookup: lookup)
             .run(bookmarks: bookmarks, history: history, settings: NeedleSettings())
-        let priorLedger = try XCTUnwrap(defaults.data(forKey: "needle.artworkBackfill.v2"))
-        defaults.set(priorLedger, forKey: "needle.artworkBackfill.v1")
-        defaults.removeObject(forKey: "needle.artworkBackfill.v2")
+        let priorLedger = try XCTUnwrap(defaults.data(forKey: "needle.artworkBackfill.v3"))
+        defaults.set(priorLedger, forKey: "needle.artworkBackfill.v2")
+        defaults.removeObject(forKey: "needle.artworkBackfill.v3")
         await ArtworkBackfillService(defaults: defaults, lookup: lookup)
             .run(bookmarks: bookmarks, history: history, settings: NeedleSettings())
         XCTAssertEqual(calls, 2)
@@ -129,6 +132,33 @@ final class ArtworkBackfillTests: XCTestCase {
     func testCLIResponseDecodesPinnedReleaseIdentity() throws {
         let response = try NeedleCLIService.parseLastJSON(ArtworkBackfillResponse.self, data: Data(#"{"ok":true,"status":"matched","artwork":{"url":"https://example.com/cover","provider":"cover_art_archive","release_id":"edition","release_group_id":"group"}}"#.utf8))
         XCTAssertEqual(response.artwork?.releaseId, "edition")
+    }
+
+    func testMalformedSidecarSourceDoesNotCrashAutomaticBackfill() async throws {
+        let suite = "NeedleMalformedBackfill.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp3")
+        let sidecar = file.deletingPathExtension().appendingPathExtension("json")
+        try Data([1]).write(to: file)
+        defer {
+            try? FileManager.default.removeItem(at: file)
+            try? FileManager.default.removeItem(at: sidecar)
+        }
+        let history = HistoryStore(defaults: defaults)
+        history.upsert(TrackRequest(artist: "Artist", title: "Song", savedPath: file.path, stage: .saved))
+        var calls = 0
+        let service = ArtworkBackfillService(defaults: defaults, lookup: { _, _ in
+            calls += 1
+            return ArtworkBackfillResponse(ok: true, artwork: nil, status: "unmatched", error: nil)
+        })
+        let malformedSources: [Any] = ["malformed", 42, NSNull(), ["malformed"]]
+        for source in malformedSources {
+            try JSONSerialization.data(withJSONObject: ["selected_source": source]).write(to: sidecar)
+            await service.run(bookmarks: BookmarkStore(defaults: defaults), history: history, settings: NeedleSettings(), retry: true)
+        }
+        XCTAssertEqual(calls, 4)
+        XCTAssertNil(history.tracks.first?.artworkUpdatedAt)
     }
 
     func testExplicitlyClearedCoverStaysExcludedAfterRelaunch() async throws {
@@ -209,5 +239,51 @@ final class ArtworkBackfillTests: XCTestCase {
         XCTAssertEqual(service.temporaryFailures, 0)
         XCTAssertEqual(service.catalogMisses, 0)
         XCTAssertEqual(service.filled, 2)
+    }
+
+    func testSourceArgumentsCarryThumbnailAndPositiveDuration() {
+        var request = ArtworkBackfillRequest(artist: "Wiz Khalifa", title: "MAAN! Weedmix", album: "", path: nil,
+            sourceTitle: "Wiz Khalifa - MAAN! Weedmix", sourceDurationMs: 251_000,
+            sourceURL: "https://youtu.be/abcdefghijk", sourceThumbnailURL: "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg")
+        XCTAssertEqual(request.arguments, ["artwork", "--artist", "Wiz Khalifa", "--title", "MAAN! Weedmix", "--album", "", "--json",
+            "--source-title", "Wiz Khalifa - MAAN! Weedmix", "--source-duration-ms", "251000",
+            "--source-url", "https://youtu.be/abcdefghijk", "--source-thumbnail-url", "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"])
+        request.sourceDurationMs = 0
+        XCTAssertFalse(request.arguments.contains("--source-duration-ms"))
+    }
+
+    func testSavedSourceEvidenceChangesRetryWithoutWaitingForCooldown() async throws {
+        let suite = "NeedleBackfill.\(UUID())"; let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("Song.mp3")
+        let sidecar = directory.appendingPathComponent("Song.json")
+        try Data([1]).write(to: file)
+        let writeSource = { (duration: Int) in
+            try Data("{\"selected_source\":{\"title\":\"Artist - Song\",\"duration_ms\":\(duration),\"url\":\"https://youtu.be/abcdefghijk\",\"provider\":\"youtube\",\"id\":\"abcdefghijk\"}}".utf8).write(to: sidecar)
+        }
+        try writeSource(180_000)
+        let originalDate = try XCTUnwrap(try sidecar.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+        let history = HistoryStore(defaults: defaults)
+        history.upsert(TrackRequest(artist: "Artist", title: "Song", sourceURL: "https://youtu.be/abcdefghijk", savedPath: file.path, stage: .saved))
+        let bookmarks = BookmarkStore(defaults: defaults)
+        var calls = 0
+        let service = ArtworkBackfillService(defaults: defaults, lookup: { request, _ in
+            calls += 1
+            XCTAssertEqual(request.sourceURL, history.tracks[0].sourceURL)
+            return ArtworkBackfillResponse(ok: true, artwork: nil, status: "unmatched", error: nil)
+        })
+        await service.run(bookmarks: bookmarks, history: history, settings: NeedleSettings())
+        await service.run(bookmarks: bookmarks, history: history, settings: NeedleSettings())
+        XCTAssertEqual(calls, 1)
+        try writeSource(181_000)
+        try FileManager.default.setAttributes([.modificationDate: originalDate], ofItemAtPath: sidecar.path)
+        await service.run(bookmarks: bookmarks, history: history, settings: NeedleSettings())
+        XCTAssertEqual(calls, 2, "Source evidence itself must change the key even at identical file size and mtime")
+        history.tracks[0].sourceURL = "https://youtu.be/other-video"
+        await service.run(bookmarks: bookmarks, history: history, settings: NeedleSettings())
+        XCTAssertEqual(calls, 3)
     }
 }

@@ -1,0 +1,89 @@
+{
+  "recordings": [
+    {
+      "id": "ecef1666-ed42-4b02-8051-9d734f492322",
+      "title": "Maan!",
+      "length": 249652,
+      "artist-credit": [
+        {
+          "name": "Wiz Khalifa"
+        }
+      ],
+      "releases": [
+        {
+          "id": "834a8ae9-4c35-4945-825f-1776b23f7fcb",
+          "title": "28 Grams (Trap Wiz)",
+          "status": "Official",
+          "release-group": {
+            "id": "6ab139b6-0fbe-4673-b4b6-d75ca0f798ad",
+            "primary-type": "Album",
+            "secondary-types": [
+              "Mixtape/Street"
+            ]
+          },
+          "date": "2015-01-18"
+        }
+      ]
+    },
+    {
+      "id": "23e10678-e785-4f32-ad41-5d9cd4f23fcb",
+      "title": "Maan!",
+      "length": 250000,
+      "artist-credit": [
+        {
+          "name": "Wiz Khalifa"
+        }
+      ],
+      "releases": [
+        {
+          "id": "c105161b-4008-41a6-8f9e-431da55156a6",
+          "title": "28 Grams",
+          "status": "Official",
+          "release-group": {
+            "id": "6ab139b6-0fbe-4673-b4b6-d75ca0f798ad",
+            "primary-type": "Album",
+            "secondary-types": [
+              "Mixtape/Street"
+            ]
+          },
+          "date": "2014-05-25"
+        }
+      ]
+    },
+    {
+      "id": "86757756-040b-4d50-aabe-d8e1248ef46e",
+      "title": "Maan! (Weedmix)",
+      "length": 249000,
+      "artist-credit": [
+        {
+          "name": "Wiz Khalifa"
+        }
+      ]
+    },
+    {
+      "id": "b56fff99-fc9d-43fe-b5aa-8687968ea3a9",
+      "title": "Maan",
+      "length": 258000,
+      "artist-credit": [
+        {
+          "name": "Wiz Khalifa-Maan"
+        }
+      ],
+      "releases": [
+        {
+          "id": "80daf3b3-61cf-438c-b73b-b88fc4acf9b6",
+          "title": "Taylor Empire",
+          "status": "Official",
+          "release-group": {
+            "id": "59716c0a-6a95-4284-8837-015d2666f8db",
+            "primary-type": "Album",
+            "secondary-types": [
+              "Mixtape/Street"
+            ]
+          },
+          "date": "2015-11-26"
+        }
+      ]
+    }
+  ]
+}
