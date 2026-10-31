@@ -49,6 +49,29 @@ printf '%s\n' '{"ok":true,"request":{"artist":"A","title":"T"},"metadata":null,"
         XCTAssertTrue(response.ok)
     }
 
+    func testManyConcurrentServicesDoNotExhaustGlobalExecutor() async throws {
+        let fixture = try CLIFixture(script: #"""
+#!/bin/bash
+set -eu
+printf '%s\n' '{"ok":true}'
+"""#)
+        var settings = NeedleSettings(); settings.cliPath = fixture.path
+        let sharedSettings = settings
+        try await withThrowingTaskGroup(of: Data.self) { group in
+            for _ in 0..<160 {
+                group.addTask {
+                    try await NeedleCLIService().runJSONCommand(["noop", "--json"], settings: sharedSettings)
+                }
+            }
+            var completed = 0
+            for try await output in group {
+                XCTAssertTrue(String(decoding: output, as: UTF8.self).contains("\"ok\":true"))
+                completed += 1
+            }
+            XCTAssertEqual(completed, 160)
+        }
+    }
+
     @MainActor
     func testLibraryScanPassesRootAndMergesStructuredMetadata() async throws {
         let fixture = try CLIFixture(script: #"""

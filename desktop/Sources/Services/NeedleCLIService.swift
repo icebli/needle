@@ -270,8 +270,11 @@ actor NeedleCLIService {
         process.standardOutput = out
         process.standardError = err
         process.standardInput = FileHandle.nullDevice
-        let terminated = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in terminated.signal() }
+        let completion = DispatchGroup()
+        completion.enter()
+        process.terminationHandler = { _ in
+            completion.leave()
+        }
         try process.run()
         activeProcess = process
         wasCancelled = false
@@ -279,40 +282,37 @@ actor NeedleCLIService {
             Self.terminateOwnedProcess(process)
         }
         defer { NotificationCenter.default.removeObserver(quitObserver) }
-        let result = await withCheckedContinuation { (continuation: CheckedContinuation<ProcessResult, Never>) in
-            DispatchQueue.global().async {
-                let group = DispatchGroup()
-                let stdout = ProcessDataBox(), stderr = ProcessDataBox()
-                group.enter()
-                DispatchQueue.global().async {
-                    stdout.data = out.fileHandleForReading.readDataToEndOfFile()
-                    group.leave()
-                }
-                group.enter()
-                DispatchQueue.global().async {
-                    var pending = Data(), captured = Data()
-                    while true {
-                        let chunk = err.fileHandleForReading.readData(ofLength: 4096)
-                        if chunk.isEmpty { break }
-                        pending.append(chunk)
-                        captured.append(chunk)
-                        if captured.count > 262_144 { captured.removeFirst(captured.count - 262_144) }
-                        while let newline = pending.firstIndex(of: 10) {
-                            let line = pending.prefix(upTo: newline)
-                            if let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
-                               object["event"] as? String == "progress", let stage = object["stage"] as? String {
-                                onProgress(stage)
-                            }
-                            pending.removeSubrange(...newline)
-                        }
-                        // Diagnostics without newlines should not grow unbounded.
-                        if pending.count > 262_144 { pending.removeAll() }
+        let stdout = ProcessDataBox(), stderr = ProcessDataBox()
+        completion.enter()
+        DispatchQueue.global().async {
+            stdout.data = out.fileHandleForReading.readDataToEndOfFile()
+            completion.leave()
+        }
+        completion.enter()
+        DispatchQueue.global().async {
+            var pending = Data(), captured = Data()
+            while true {
+                let chunk = err.fileHandleForReading.readData(ofLength: 4096)
+                if chunk.isEmpty { break }
+                pending.append(chunk)
+                captured.append(chunk)
+                if captured.count > 262_144 { captured.removeFirst(captured.count - 262_144) }
+                while let newline = pending.firstIndex(of: 10) {
+                    let line = pending.prefix(upTo: newline)
+                    if let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                       object["event"] as? String == "progress", let stage = object["stage"] as? String {
+                        onProgress(stage)
                     }
-                    stderr.data = captured
-                    group.leave()
+                    pending.removeSubrange(...newline)
                 }
-                terminated.wait()
-                group.wait()
+                // Diagnostics without newlines should not grow unbounded.
+                if pending.count > 262_144 { pending.removeAll() }
+            }
+            stderr.data = captured
+            completion.leave()
+        }
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<ProcessResult, Never>) in
+            completion.notify(queue: .global()) {
                 continuation.resume(returning: ProcessResult(output: stdout.data, error: stderr.data, status: process.terminationStatus))
             }
         }

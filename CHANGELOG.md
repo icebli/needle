@@ -2,7 +2,9 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
-## 0.10.2
+## 0.10.3
+
+- Complete parallel Library artwork reads without exhausting the subprocess worker pool.
 
 - Match release artwork using selected-source evidence when upload and catalog version labels differ, with duration checks for those differences.
 - Use the same artwork matching for existing bookmarks and saved tracks, and retry previous misses after upgrading.
