@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct MetadataDraft: Codable, Identifiable {
+struct MetadataDraft: Codable, Equatable, Identifiable {
     var artist: String
     var title: String
     var album: String

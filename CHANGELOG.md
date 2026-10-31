@@ -2,6 +2,13 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.10.5
+
+- Retain the exact approved source, metadata, artwork, output settings, and Spotify delivery choice when a save fails.
+- Retry eligible failed saves directly from Activity without reviewing metadata again.
+- Keep a durable copy of approved artwork so retries preserve the same cover.
+- Require Library review when an earlier save may already have kept a file, preventing blind duplicate retries.
+
 ## 0.10.4
 
 - Explain failed saves directly in Activity and keep technical output available separately.

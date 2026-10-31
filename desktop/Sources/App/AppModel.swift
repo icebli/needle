@@ -13,6 +13,8 @@ final class AppModel {
     var isSearching = false
     var isSaving: Bool { !saveServices.isEmpty }
     private var saveServices: [UUID: NeedleCLIService] = [:]
+    private let approvedArtworkStore: ApprovedArtworkStore
+    private let savedTrackHandoff: ((TrackRequest) -> Void)?
     var reviewQueue: ReviewQueue
     var discovery: DiscoveryStore
     var bookmarks: BookmarkStore
@@ -35,15 +37,18 @@ final class AppModel {
     let spotify = SpotifyHostService()
     var isBusy: Bool { isSearching || isSaving }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, approvedArtworkStore: ApprovedArtworkStore = ApprovedArtworkStore(),
+         savedTrackHandoff: ((TrackRequest) -> Void)? = nil) {
+        self.approvedArtworkStore = approvedArtworkStore
+        self.savedTrackHandoff = savedTrackHandoff
         settings = SettingsStore(defaults: defaults)
         let savedHistory = HistoryStore(defaults: defaults)
         history = savedHistory
-        reviewQueue = ReviewQueue(defaults: defaults, history: savedHistory)
+        reviewQueue = ReviewQueue(defaults: defaults, history: savedHistory, approvedArtworkStore: approvedArtworkStore)
         discovery = DiscoveryStore(defaults: defaults)
         bookmarks = BookmarkStore(defaults: defaults)
         artworkBackfill = ArtworkBackfillService(defaults: defaults)
-        reviewQueue.onSaved = { [weak self] track, spotify in if spotify { self?.enqueue(track) } }
+        reviewQueue.onSaved = { [weak self] track, spotify in if spotify { self?.deliverApprovedSave(track) } }
         artworkBackfill.onFileUpdated = { [weak self] updated, previous in
             self?.reconcileSpotifyMetadata(updated, previous: previous)
         }
@@ -137,7 +142,7 @@ final class AppModel {
         isCancelling = true
         Task {
             if isSearching { await cli.cancel() }
-            else if let service = saveServices.values.first { await service.cancel() }
+            else if let service = saveServices.values.first { await service.cancelSave() }
         }
     }
 
@@ -200,40 +205,51 @@ final class AppModel {
             message = "Choose an eligible recording from the current search."
             return
         }
-        let album = snapshot.album
-        let track = TrackRequest(artist: snapshot.artist, title: snapshot.title, album: album,
+        guard let approved else { return }
+        var track = TrackRequest(artist: snapshot.artist, title: snapshot.title, album: snapshot.album,
                                  sourceURL: candidate.candidate.url, stage: .metadata,
                                  settingsSnapshot: snapshot.settings)
+        track.approvedSave = ApprovedSave(metadata: approved, settings: snapshot.settings, queueSpotify: queueSpotify)
+        track.artworkSuppressed = approved.artworkSuppressed
         history.upsert(track)
-        let downloadService = NeedleCLIService()
-        saveServices[track.id] = downloadService
         selectedCandidateID = candidate.id
         destination = .activity
         message = nil
+        startApprovedSave(track)
+    }
+
+    func canRetrySave(_ track: TrackRequest) -> Bool {
+        history.canRetrySave(track) && saveServices[track.id] == nil && !reviewQueue.isSaving(track.id)
+    }
+
+    func retrySave(_ track: TrackRequest) {
+        guard canRetrySave(track), let current = history.tracks.first(where: { $0.id == track.id }) else { return }
+        startApprovedSave(current, retry: true)
+    }
+
+    private func startApprovedSave(_ track: TrackRequest, retry: Bool = false) {
+        let service = NeedleCLIService()
+        saveServices[track.id] = service
+        if retry { reviewQueue.markRetrying(track, service: service) }
+        var active = track
+        active.stage = .metadata
+        active.saveRetrySafety = .requiresReview
+        active.errorDetail = nil
+        history.upsert(active)
         Task { [self] in
-            let result = await downloadService.get(track: track, settings: snapshot.settings, approved: approved, onProgress: { [weak self] stage in
-                Task { @MainActor in
-                    guard let self, self.saveServices[track.id] != nil, let stage = JobStage.progress(stage),
-                          var current = self.history.tracks.first(where: { $0.id == track.id }),
-                          current.savedPath == nil else { return }
-                    current.stage = stage
-                    self.history.upsert(current)
-                }
-            })
-            saveServices.removeValue(forKey: track.id)
+            let result = await ApprovedSaveOperation.run(active, history: history, artworkStore: approvedArtworkStore, service: service)
             isCancelling = false
-            switch result {
-            case .success(var saved):
-                saved.stage = .saved
-                history.upsert(saved)
-                if queueSpotify && snapshot.settings.format == "mp3" { enqueue(saved) }
-            case .failure(let error):
-                var failed = history.tracks.first(where: { $0.id == track.id }) ?? track
-                failed.stage = error is CancellationError ? .cancelled : .failed
-                failed.errorDetail = error is CancellationError ? "The download was cancelled. No existing music was removed." : error.localizedDescription
-                history.upsert(failed)
+            if let finished = history.tracks.first(where: { $0.id == track.id }) { reviewQueue.finishRetry(finished) }
+            saveServices.removeValue(forKey: track.id)
+            if case .success(let saved) = result, saved.approvedSave?.queueSpotify == true {
+                deliverApprovedSave(saved)
             }
         }
+    }
+
+    private func deliverApprovedSave(_ track: TrackRequest) {
+        if let savedTrackHandoff { savedTrackHandoff(track) }
+        else { enqueue(track) }
     }
 
     func enqueue(_ track: TrackRequest, handoff: ((TrackRequest, String) async -> Result<String, Error>)? = nil) {

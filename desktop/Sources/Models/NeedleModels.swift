@@ -72,6 +72,9 @@ struct TrackRequest: Codable, Equatable, Identifiable {
     var discoveredFromFolder: Bool?
     var artworkUpdatedAt: Date?
     var artworkSuppressed: Bool?
+    var approvedSave: ApprovedSave?
+    var saveRetrySafety: SaveRetrySafety?
+    var unconfirmedSavedPath: String?
 
     init(id: UUID = UUID(), artist: String, title: String, album: String = "", sourceURL: String = "", savedPath: String? = nil, spotifyStatus: SpotifyStatus = .notQueued, spotifyJobID: String? = nil, spotifyPlaylistName: String? = nil, spotifyPlaylistURI: String? = nil, stage: JobStage = .saving, settingsSnapshot: NeedleSettings? = nil, date: Date = .now, discoveredFromFolder: Bool? = nil) {
         self.id = id; self.artist = artist; self.title = title; self.album = album; self.sourceURL = sourceURL; self.savedPath = savedPath; self.spotifyStatus = spotifyStatus; self.spotifyJobID = spotifyJobID; self.spotifyPlaylistName = spotifyPlaylistName; self.spotifyPlaylistURI = spotifyPlaylistURI; self.stage = stage; self.settingsSnapshot = settingsSnapshot; self.date = date

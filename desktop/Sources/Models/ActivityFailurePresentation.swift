@@ -6,8 +6,8 @@ struct ActivityFailurePresentation {
     let recovery: String
     let technicalDetail: String?
 
-    init?(track: TrackRequest) {
-        guard track.stage == .failed || track.spotifyStatus == .failed else { return nil }
+    init?(track: TrackRequest, canRetry: Bool = false) {
+        guard track.stage == .failed || track.spotifyStatus == .failed || track.stage == .interrupted && track.approvedSave != nil else { return nil }
         technicalDetail = track.errorDetail.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
         let reason = Self.failureReason(in: technicalDetail)
 
@@ -15,6 +15,22 @@ struct ActivityFailurePresentation {
             statusLabel = "Save needs review"
             summary = "The returned recording differs from your approved source. Your file was kept."
             recovery = "Open Library and review the existing recording before approving another save."
+        } else if track.savedPath == nil && track.saveRetrySafety == .requiresArtworkReview {
+            statusLabel = "Artwork needs review"
+            summary = reason ?? "The retained approved artwork is unavailable."
+            recovery = "In Add Music, review and approve the artwork again. The original source and tags are retained in this activity."
+        } else if track.savedPath == nil && track.saveNeedsLibraryReview {
+            statusLabel = "Save needs review"
+            summary = reason ?? "Needle stopped without confirming whether a file was saved."
+            recovery = "Open Library and check for this recording before approving another save. Your original approval is retained."
+        } else if track.savedPath == nil && canRetry {
+            statusLabel = "File save failed"
+            summary = reason ?? "Needle could not finish saving this recording."
+            if track.approvedSave?.artwork == .pending {
+                recovery = "Choose Retry to keep the approved source and tags and fetch the same artwork location. No audio save has started."
+            } else {
+                recovery = "Choose Retry to use the same approved source, tags, and artwork."
+            }
         } else if track.savedPath == nil {
             statusLabel = "File save failed"
             if reason?.localizedCaseInsensitiveContains("approved artwork URL did not return a recognized image") == true {

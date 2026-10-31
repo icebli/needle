@@ -66,6 +66,7 @@ final class ReviewQueue {
     var onSaved: ((TrackRequest, Bool) -> Void)?
     private let defaults: UserDefaults
     private let history: HistoryStore
+    private let approvedArtworkStore: ApprovedArtworkStore
     private var searchService: NeedleCLIService?
     private var searchID: UUID?
     private var downloads: [UUID: NeedleCLIService] = [:]
@@ -77,12 +78,13 @@ final class ReviewQueue {
     var activeDownloads: Int { downloads.count }
     var selected: ReviewItem? { items.first { $0.id == selectedID } }
 
-    init(defaults: UserDefaults = .standard, history: HistoryStore) {
+    init(defaults: UserDefaults = .standard, history: HistoryStore, approvedArtworkStore: ApprovedArtworkStore = ApprovedArtworkStore()) {
         self.defaults = defaults
         self.history = history
+        self.approvedArtworkStore = approvedArtworkStore
         items = defaults.data(forKey: key).flatMap { try? JSONDecoder().decode([ReviewItem].self, from: $0) } ?? []
         for index in items.indices {
-            if let trackID = items[index].trackID, history.tracks.contains(where: { $0.id == trackID && $0.savedPath != nil }) {
+            if let trackID = items[index].trackID, history.tracks.contains(where: { $0.id == trackID && $0.savedPath != nil && $0.stage != .failed }) {
                 items[index].state = .saved
             } else if [.searching, .approved, .downloading].contains(items[index].state) {
                 items[index].state = .interrupted
@@ -166,7 +168,7 @@ final class ReviewQueue {
 
     func cancel(_ id: UUID) {
         if searchID == id, let service = searchService { Task { await service.cancel() } }
-        if let service = downloads[id] { Task { await service.cancel() } }
+        if let service = downloads[id] { Task { await service.cancelSave() } }
     }
 
     private func selectNext(after id: UUID) {
@@ -228,30 +230,21 @@ final class ReviewQueue {
             let service = NeedleCLIService()
             downloads[item.id] = service
             item.state = .downloading
-            let track = TrackRequest(artist: item.artist, title: item.title,
+            var track = TrackRequest(artist: item.artist, title: item.title,
                                      album: item.settings.albumHint,
                                      sourceURL: candidate.candidate.url, stage: .metadata, settingsSnapshot: item.settings)
+            track.approvedSave = ApprovedSave(metadata: tags, settings: item.settings, queueSpotify: item.queueSpotify)
+            track.artworkSuppressed = tags.artworkSuppressed
             item.trackID = track.id; update(item); history.upsert(track)
             let approved = item
             Task { [self] in
-                let result = await service.get(track: track, settings: approved.settings, approved: tags, onProgress: { [weak self] stage in
-                    Task { @MainActor in
-                        guard let self, self.downloads[approved.id] != nil,
-                              var current = self.history.tracks.first(where: { $0.id == track.id }),
-                              let stage = JobStage.progress(stage), current.savedPath == nil else { return }
-                        current.stage = stage; self.history.upsert(current)
-                    }
-                })
+                let result = await ApprovedSaveOperation.run(track, history: history, artworkStore: approvedArtworkStore, service: service)
                 var finished = self.items.first(where: { $0.id == approved.id }) ?? approved
                 switch result {
-                case .success(var saved):
-                    saved.stage = .saved; self.history.upsert(saved)
+                case .success(let saved):
                     finished.state = .saved; finished.detail = saved.savedPath
                     self.onSaved?(saved, approved.queueSpotify)
                 case .failure(let error):
-                    var failed = self.history.tracks.first(where: { $0.id == track.id }) ?? track
-                    failed.stage = error is CancellationError ? .cancelled : .failed
-                    failed.errorDetail = error.localizedDescription; self.history.upsert(failed)
                     finished.state = .failed; finished.detail = error.localizedDescription
                 }
                 self.update(finished)
@@ -259,6 +252,27 @@ final class ReviewQueue {
                 self.downloadNext()
             }
         }
+    }
+
+    func isSaving(_ trackID: UUID) -> Bool {
+        items.contains { $0.trackID == trackID && [.approved, .downloading].contains($0.state) }
+    }
+
+    func markRetrying(_ track: TrackRequest, service: NeedleCLIService) {
+        guard var item = items.first(where: { $0.trackID == track.id }) else { return }
+        downloads[item.id] = service
+        item.state = .downloading
+        item.detail = "Retrying the approved recording and track details…"
+        update(item)
+    }
+
+    func finishRetry(_ track: TrackRequest) {
+        guard var item = items.first(where: { $0.trackID == track.id }) else { return }
+        item.state = track.savedPath != nil && track.stage == .saved ? .saved : .failed
+        item.detail = track.errorDetail ?? track.savedPath
+        update(item)
+        downloads.removeValue(forKey: item.id)
+        downloadNext()
     }
 
     private func persist() {

@@ -66,14 +66,17 @@ struct TrackRow: View {
     let track: TrackRequest
     let model: AppModel
     var body: some View {
-        let failure = ActivityFailurePresentation(track: track)
+        let canRetry = model.canRetrySave(track)
+        let failure = ActivityFailurePresentation(track: track, canRetry: canRetry)
+        let approved = track.savedPath == nil ? track.approvedSave?.metadata : nil
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 14) {
                 ActivityArtwork(track: track, model: model,
                                fallbackSymbol: track.savedPath == nil ? "waveform" : "music.note")
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(track.title).font(.headline)
-                    Text(track.artist + (track.album.isEmpty ? "" : " · \(track.album)")).foregroundStyle(.secondary)
+                    Text(approved?.title ?? track.title).font(.headline)
+                    let album = approved?.album ?? track.album
+                    Text((approved?.artist ?? track.artist) + (album.isEmpty ? "" : " · \(album)")).foregroundStyle(.secondary)
                     Label(failure?.statusLabel ?? activityLabel(for: track), systemImage: activitySymbol(for: track))
                         .font(.callout.weight(.medium))
                         .foregroundStyle(failure == nil ? Color.primary : Color.red)
@@ -99,6 +102,12 @@ struct TrackRow: View {
                     }
                 }
                 Spacer()
+                if canRetry {
+                    Button("Retry") { model.retrySave(track) }
+                        .help(track.approvedSave?.artwork == .pending
+                              ? "Retry the approved source and tags with the same artwork location"
+                              : "Save the same approved source, tags, and artwork")
+                }
                 if let path = track.savedPath {
                     VStack(alignment: .trailing, spacing: 8) {
                         Button("Show in Finder") {

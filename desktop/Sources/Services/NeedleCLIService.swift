@@ -6,11 +6,13 @@ struct ProcessResult {
     let output: Data
     let error: Data
     let status: Int32
+    var sawSaveProgress = false
 }
 
 actor NeedleCLIService {
     private var activeProcess: Process?
     private var wasCancelled = false
+    private var saveCancelled = false
 
     private func executable(settings: NeedleSettings) -> String? {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -149,6 +151,9 @@ actor NeedleCLIService {
         if !track.album.isEmpty { args += ["--album", track.album] }
         appendMetadataOptions(settings, to: &args)
         do {
+            if saveCancelled {
+                throw SaveAttemptFailure(detail: "The save was cancelled before audio work started.", safety: .retryable, cancelled: true)
+            }
             if let approved {
                 guard approved.sourceURL == track.sourceURL else {
                     throw CLIError.message("The approved metadata belongs to a different recording.")
@@ -159,7 +164,7 @@ actor NeedleCLIService {
                 }
                 args += ["--approved-tags", json]
             }
-            let result = try await execute(args, settings: settings, onProgress: onProgress)
+            let result = try await execute(args, settings: settings, onProgress: onProgress, saveAttempt: true)
             struct Saved: Decodable {
                 let ok: Bool
                 let savedPath: String?
@@ -168,12 +173,14 @@ actor NeedleCLIService {
                 let album: String?
                 let sourceUrl: String?
             }
-            let saved = try Self.parseLastJSON(Saved.self, data: result.output)
+            let saved: Saved
+            do { saved = try Self.parseLastJSON(Saved.self, data: result.output) }
+            catch { throw SaveAttemptFailure(detail: error.localizedDescription, safety: .requiresReview) }
             guard saved.ok, let path = saved.savedPath, !path.isEmpty else {
-                throw CLIError.message("Needle did not confirm a saved file.")
+                throw SaveAttemptFailure(detail: "Needle did not confirm a saved file. Review Library before saving again.", safety: .requiresReview, savedPath: saved.savedPath)
             }
             guard saved.sourceUrl == track.sourceURL else {
-                throw CLIError.message("The returned recording differs from your approved source. Your file was kept; review its details.")
+                throw SaveAttemptFailure(detail: "The returned recording differs from your approved source. Your file was kept; review its details.", safety: .requiresReview, savedPath: path)
             }
             var finished = track
             finished.savedPath = path
@@ -182,7 +189,9 @@ actor NeedleCLIService {
             finished.album = saved.album ?? track.album
             finished.artworkSuppressed = approved?.artworkSuppressed ?? track.artworkSuppressed
             return .success(finished)
-        } catch { return .failure(error) }
+        } catch {
+            return .failure(error as? SaveAttemptFailure ?? SaveAttemptFailure(detail: error.localizedDescription, safety: .retryable))
+        }
     }
 
     private func appendMetadataOptions(_ settings: NeedleSettings, to args: inout [String]) {
@@ -194,6 +203,11 @@ actor NeedleCLIService {
         guard let process = activeProcess, process.isRunning else { return }
         wasCancelled = true
         Self.terminateOwnedProcess(process)
+    }
+
+    func cancelSave() {
+        saveCancelled = true
+        cancel()
     }
 
     private nonisolated static func descendants(of parent: Int32) -> [Int32] {
@@ -256,7 +270,8 @@ actor NeedleCLIService {
     }
 
     private func execute(_ args: [String], settings: NeedleSettings,
-                         onProgress: @escaping @Sendable (String) -> Void = { _ in }) async throws -> ProcessResult {
+                         onProgress: @escaping @Sendable (String) -> Void = { _ in },
+                         saveAttempt: Bool = false) async throws -> ProcessResult {
         guard activeProcess == nil else { throw CLIError.message("Needle is already working. Wait or cancel the current operation.") }
         guard let path = executable(settings: settings) else { throw CLIError.missing }
         let process = Process()
@@ -291,6 +306,15 @@ actor NeedleCLIService {
         completion.enter()
         DispatchQueue.global().async {
             var pending = Data(), captured = Data()
+            func consume(_ line: Data) {
+                if let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                   object["event"] as? String == "progress", let stage = object["stage"] as? String {
+                    if ["metadata", "search", "download", "convert", "tag", "save"].contains(stage) { stderr.sawProgress = true }
+                    if stage == "save" { stderr.sawSaveProgress = true }
+                    onProgress(stage)
+                }
+                if String(decoding: line, as: UTF8.self).localizedCaseInsensitiveContains("file was kept") { stderr.fileWasKept = true }
+            }
             while true {
                 let chunk = err.fileHandleForReading.readData(ofLength: 4096)
                 if chunk.isEmpty { break }
@@ -298,25 +322,32 @@ actor NeedleCLIService {
                 captured.append(chunk)
                 if captured.count > 262_144 { captured.removeFirst(captured.count - 262_144) }
                 while let newline = pending.firstIndex(of: 10) {
-                    let line = pending.prefix(upTo: newline)
-                    if let object = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
-                       object["event"] as? String == "progress", let stage = object["stage"] as? String {
-                        onProgress(stage)
-                    }
+                    consume(Data(pending.prefix(upTo: newline)))
                     pending.removeSubrange(...newline)
                 }
                 // Diagnostics without newlines should not grow unbounded.
                 if pending.count > 262_144 { pending.removeAll() }
             }
+            if !pending.isEmpty { consume(pending) }
             stderr.data = captured
             completion.leave()
         }
         let result = await withCheckedContinuation { (continuation: CheckedContinuation<ProcessResult, Never>) in
             completion.notify(queue: .global()) {
-                continuation.resume(returning: ProcessResult(output: stdout.data, error: stderr.data, status: process.terminationStatus))
+                continuation.resume(returning: ProcessResult(output: stdout.data, error: stderr.data, status: process.terminationStatus, sawSaveProgress: stderr.sawSaveProgress))
             }
         }
         activeProcess = nil
+        if saveAttempt && (wasCancelled || result.status != 0) {
+            let savedPath = String(decoding: result.output, as: UTF8.self).components(separatedBy: .newlines).compactMap { line -> String? in
+                let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+                return (object?["saved_path"] as? String) ?? (object?["savedPath"] as? String)
+            }.first
+            let detail = String(decoding: result.error, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            let safety: SaveRetrySafety = stderr.sawProgress && !result.sawSaveProgress && !stderr.fileWasKept && savedPath == nil ? .retryable : .requiresReview
+            throw SaveAttemptFailure(detail: wasCancelled ? "The download was cancelled." : (detail.isEmpty ? "Needle could not complete this save." : detail),
+                                     safety: safety, cancelled: wasCancelled, savedPath: savedPath)
+        }
         if wasCancelled { throw CancellationError() }
         guard result.status == 0 else {
             let detail = String(decoding: result.error, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -326,7 +357,12 @@ actor NeedleCLIService {
     }
 }
 
-private final class ProcessDataBox: @unchecked Sendable { var data = Data() }
+private final class ProcessDataBox: @unchecked Sendable {
+    var data = Data()
+    var sawProgress = false
+    var sawSaveProgress = false
+    var fileWasKept = false
+}
 
 enum CLIError: LocalizedError {
     case missing
