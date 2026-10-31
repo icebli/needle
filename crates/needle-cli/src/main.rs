@@ -1351,6 +1351,11 @@ async fn download_approved_artwork(url: &str) -> Result<PathBuf> {
     {
         bail!("approved artwork MIME type {declared:?} does not match image bytes ({mime})");
     }
+    let (bytes, extension) = if mime == "image/webp" {
+        (webp_artwork_as_jpeg(&bytes).await?, "jpg")
+    } else {
+        (bytes, extension)
+    };
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -1360,6 +1365,74 @@ async fn download_approved_artwork(url: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+async fn webp_artwork_as_jpeg(bytes: &[u8]) -> Result<Vec<u8>> {
+    struct ConversionDirectory(PathBuf);
+    impl Drop for ConversionDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    let directory = std::env::temp_dir().join(format!(
+        "needle-artwork-conversion-{}-{nonce}",
+        std::process::id()
+    ));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&directory)?;
+    let directory = ConversionDirectory(directory);
+    let input = directory.0.join("approved.webp");
+    let output = directory.0.join("cover.jpg");
+    std::fs::write(&input, bytes)?;
+    let converted = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::process::Command::new("ffmpeg")
+            .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"])
+            .arg(&input)
+            .args([
+                "-frames:v",
+                "1",
+                "-c:v",
+                "mjpeg",
+                "-q:v",
+                "2",
+                "-fs",
+                "10485760",
+            ])
+            .arg(&output)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("approved WebP artwork conversion timed out"))??;
+    if !converted.status.success() {
+        bail!(
+            "approved WebP artwork could not be decoded: {}",
+            String::from_utf8_lossy(&converted.stderr).trim()
+        );
+    }
+    let mut jpeg = Vec::new();
+    std::fs::File::open(output)?
+        .take(10 * 1024 * 1024 + 1)
+        .read_to_end(&mut jpeg)?;
+    if jpeg.len() > 10 * 1024 * 1024 {
+        bail!("converted artwork exceeds 10 MiB limit");
+    }
+    if detect_artwork_type(&jpeg) != Some(("image/jpeg", "jpg")) {
+        bail!("approved WebP artwork conversion did not produce a JPEG image");
+    }
+    Ok(jpeg)
+}
+
 fn detect_artwork_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
     if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
         Some(("image/jpeg", "jpg"))
@@ -1367,6 +1440,14 @@ fn detect_artwork_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
         Some(("image/png", "png"))
     } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
         Some(("image/gif", "gif"))
+    } else if bytes.len() >= 20
+        && bytes.starts_with(b"RIFF")
+        && &bytes[8..12] == b"WEBP"
+        && matches!(&bytes[12..16], b"VP8 " | b"VP8L" | b"VP8X")
+        && u32::from_le_bytes(bytes[4..8].try_into().ok()?) as usize == bytes.len() - 8
+        && u32::from_le_bytes(bytes[16..20].try_into().ok()?) as usize <= bytes.len() - 20
+    {
+        Some(("image/webp", "webp"))
     } else {
         None
     }
@@ -3419,6 +3500,100 @@ esac
         std::fs::write(&source, b"not an image").unwrap();
         assert!(download_approved_artwork(url.as_str()).await.is_err());
         std::fs::remove_file(source).unwrap();
+    }
+
+    fn serve_artwork(
+        bytes: Vec<u8>,
+        content_type: &'static str,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/cover.jpg", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let count = stream.read(&mut request).unwrap();
+            assert!(request[..count].starts_with(b"GET /cover.jpg "));
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            )
+            .unwrap();
+            let _ = stream.write_all(&bytes);
+        });
+        (url, server)
+    }
+
+    #[tokio::test]
+    async fn approved_webp_artwork_is_normalized_to_jpeg_and_embedded() {
+        let webp = include_bytes!("../../../tests/fixtures/artwork/tiny.webp");
+        let (url, server) = serve_artwork(webp.to_vec(), "image/webp");
+        let result = download_approved_artwork(&url).await;
+        server.join().unwrap();
+        let image = result.unwrap();
+        let jpeg = std::fs::read(&image).unwrap();
+        assert!(jpeg.starts_with(&[0xff, 0xd8, 0xff]));
+        assert_eq!(image.extension().unwrap(), "jpg");
+
+        let audio = image.with_extension("mp3");
+        std::fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../tests/fixtures/tag_repair.mp3"
+            ),
+            &audio,
+        )
+        .unwrap();
+        needle_core::tag::write_tags(
+            &audio,
+            &needle_core::tag::TagPlan {
+                artist: "Approved artist".into(),
+                title: "Approved title".into(),
+                source_url: Some("https://www.youtube.com/watch?v=approved".into()),
+                artwork_path: Some(image.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let tags = needle_core::tag::inspect_tags(&audio, None).unwrap();
+        assert_eq!(tags.artist.as_deref(), Some("Approved artist"));
+        assert_eq!(tags.title.as_deref(), Some("Approved title"));
+        assert_eq!(tags.artwork.len(), 1);
+        assert_eq!(tags.artwork[0].mime_type.as_deref(), Some("image/jpeg"));
+        assert_eq!(tags.artwork[0].bytes, jpeg.len());
+        std::fs::remove_file(image).unwrap();
+        std::fs::remove_file(audio).unwrap();
+    }
+
+    #[tokio::test]
+    async fn approved_jpeg_artwork_preserves_original_bytes() {
+        let jpeg = include_bytes!("../../../tests/fixtures/artwork/tiny.jpg");
+        let (url, server) = serve_artwork(jpeg.to_vec(), "image/jpeg");
+        let result = download_approved_artwork(&url).await;
+        server.join().unwrap();
+        let image = result.unwrap();
+        assert_eq!(std::fs::read(&image).unwrap(), jpeg);
+        std::fs::remove_file(image).unwrap();
+    }
+
+    #[tokio::test]
+    async fn approved_artwork_rejects_invalid_webp_and_mime_mismatches() {
+        let webp = include_bytes!("../../../tests/fixtures/artwork/tiny.webp");
+        for bytes in [
+            b"<html>not an image</html>".to_vec(),
+            webp[..16].to_vec(),
+            b"RIFF\x14\0\0\0WEBPVP8 \x08\0\0\0notwebp!".to_vec(),
+        ] {
+            let (url, server) = serve_artwork(bytes, "image/webp");
+            let result = download_approved_artwork(&url).await;
+            server.join().unwrap();
+            assert!(result.is_err());
+        }
+        let (url, server) = serve_artwork(webp.to_vec(), "image/jpeg");
+        let result = download_approved_artwork(&url).await;
+        server.join().unwrap();
+        assert!(result.is_err());
     }
 
     #[cfg(unix)]

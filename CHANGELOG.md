@@ -2,6 +2,12 @@
 
 User-visible changes for each release. See [Getting started](docs/GETTING_STARTED.md) for installation and updates.
 
+## 0.10.4
+
+- Explain failed saves directly in Activity and keep technical output available separately.
+- Distinguish failed Spotify delivery from a file save failure.
+- Convert approved WebP artwork to JPEG for embedding, including thumbnails served from `.jpg` links.
+
 ## 0.10.3
 
 - Complete parallel Library artwork reads without exhausting the subprocess worker pool.

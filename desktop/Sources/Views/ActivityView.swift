@@ -66,6 +66,7 @@ struct TrackRow: View {
     let track: TrackRequest
     let model: AppModel
     var body: some View {
+        let failure = ActivityFailurePresentation(track: track)
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 14) {
                 ActivityArtwork(track: track, model: model,
@@ -73,9 +74,18 @@ struct TrackRow: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(track.title).font(.headline)
                     Text(track.artist + (track.album.isEmpty ? "" : " · \(track.album)")).foregroundStyle(.secondary)
-                    Label(activityLabel(for: track), systemImage: activitySymbol(for: track))
+                    Label(failure?.statusLabel ?? activityLabel(for: track), systemImage: activitySymbol(for: track))
                         .font(.callout.weight(.medium))
-                        .foregroundStyle(track.spotifyStatus == .failed ? .red : .primary)
+                        .foregroundStyle(failure == nil ? Color.primary : Color.red)
+                    if let failure {
+                        Text(failure.summary)
+                            .font(.callout)
+                            .foregroundStyle(.red)
+                            .textSelection(.enabled)
+                        Text(failure.recovery)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if let path = track.savedPath {
                         DisclosureGroup("File details") {
                             Label(path, systemImage: "folder")
@@ -114,7 +124,13 @@ struct TrackRow: View {
                         .font(.caption).textSelection(.enabled)
                 }.font(.caption)
             }
-            if let detail = track.errorDetail {
+            if let failure {
+                if let detail = failure.technicalDetail {
+                    DisclosureGroup("Technical details") {
+                        Text(detail).font(.caption).textSelection(.enabled)
+                    }.font(.caption)
+                }
+            } else if let detail = track.errorDetail {
                 if track.spotifyStatus == .pending {
                     Text(detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 } else {
